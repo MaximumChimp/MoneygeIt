@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+
 import {
   View,
   Text,
@@ -33,9 +34,13 @@ useEffect(() => {
       for (const acc of allAccounts) {
         if (grouped[acc.type]) {
           grouped[acc.type].push(acc);
+        } else {
+          // fallback in case of unexpected type
+          grouped[acc.type] = [acc];
         }
       }
 
+      console.log('Grouped accounts by type:', grouped);
       setAccountsByType(grouped);
     } catch (error) {
       console.error('Error loading accounts', error);
@@ -45,6 +50,8 @@ useEffect(() => {
   const unsubscribe = navigation.addListener('focus', loadAllAccounts);
   return unsubscribe;
 }, [navigation]);
+
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -63,38 +70,50 @@ useEffect(() => {
       <Text style={styles.trackertype}>Personal Budget Tracker</Text>
 
       {/* Content */}
-      <ScrollView contentContainerStyle={styles.content}>
-        {accountTypes.map((type) => (
-          <View key={type} style={styles.typeSection}>
-            <View style={styles.typeRow}>
-              <Text style={styles.typeText}>{type}</Text>
-              <TouchableOpacity
-                onPress={() => navigation.navigate('EditAccountScreen', { account: acc })}
-              >
+     <ScrollView contentContainerStyle={styles.content}>
+  {accountTypes.map((type) => (
+    <View key={type} style={styles.typeSection}>
+      <View style={styles.typeRow}>
+        <Text style={styles.typeText}>{type}</Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('EditAccountScreen', { type })}
+        >
+          <Ionicons name="create-outline" size={20} color="#145C84" />
+        </TouchableOpacity>
+      </View>
 
-                <Ionicons name="create-outline" size={20} color="#145C84" />
-              </TouchableOpacity>
-            </View>
+      {accountsByType[type]?.length === 0 ? (
+        <Text style={styles.fallbackText}>No accounts yet.</Text>
+      ) : (
+        accountsByType[type].map((acc, idx) => (
+  <TouchableOpacity
+    key={typeof acc === 'object' && acc?.id ? acc.id : `${type}_${idx}`}
+    style={styles.accountItem}
+    onPress={() =>
+      navigation.navigate('SetupAccountScreen', {
+        account: typeof acc === 'string' ? { name: acc } : acc,
+        type,
+      })
+    }
+  >
+    <View style={styles.accountInfo}>
+          <Text style={styles.accountText}>
+            {typeof acc === 'string' ? acc : acc?.name || 'Unnamed'}
+          </Text>
+          {typeof acc === 'object' && acc?.amount != null && (
+            <Text style={styles.amountText}>
+              ₱{parseFloat(acc.amount || 0).toFixed(2)}
+            </Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    ))
 
-            {accountsByType[type]?.length === 0 ? (
-              <Text style={styles.fallbackText}>No accounts yet.</Text>
-            ) : (
-              accountsByType[type].map((acc, idx) => (
-                <TouchableOpacity
-                key={idx}
-                style={styles.accountItem}
-                onPress={() => navigation.navigate('SetupAccountScreen', { account: acc,type })}
-              >
-                <Text style={styles.accountText}>
-                {acc.name}
-              </Text>
-              </TouchableOpacity>
+      )}
+    </View>
+  ))}
+</ScrollView>
 
-              ))
-            )}
-          </View>
-        ))}
-      </ScrollView>
     </SafeAreaView>
   );
 }

@@ -15,58 +15,73 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function EditAccountScreen({ navigation, route }) {
-  const account = route?.params?.account || { name: '', type: 'Cash' };
-  const { name, type } = account;
+const { type = 'Cash' } = route?.params || {};
 
-const [inputs, setInputs] = useState([]);
 const [existingCategories, setExistingCategories] = useState([]);
+const [inputs, setInputs] = useState([]);
+const [categories, setCategories] = useState([]);
 const [hasChanges, setHasChanges] = useState(false);
 useEffect(() => {
   console.log('ROUTE PARAMS:', route?.params);
 }, []);
 
 useEffect(() => {
-  const loadCategories = async () => {
+  const loadAccountsByType = async () => {
     try {
       const json = await AsyncStorage.getItem(`categories_${type}`);
-      if (json) {
-        setExistingCategories(JSON.parse(json));
-      }
+      const saved = json ? JSON.parse(json) : [];
+      setCategories(saved);
     } catch (error) {
-      console.error('Error loading categories', error);
+      console.error('Failed to load categories:', error);
     }
   };
-  loadCategories();
+
+
+  loadAccountsByType();
 }, [type]);
 
-  const handleAddField = () => {
-    setInputs([...inputs, '']);
-  };
+const handleAddField = () => {
+  setCategories([...categories, {
+    id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
+    name: '',
+    amount: 0,
+  }]);
+  setHasChanges(true);
+};
+
 
   const handleChange = (text, index) => {
-    const newInputs = [...inputs];
-    newInputs[index] = text;
-    setInputs(newInputs);
-    setHasChanges(true);
+  const newCategories = [...categories];
+  newCategories[index] = {
+    ...newCategories[index],
+    name: text,
   };
+  setCategories(newCategories);
+  setHasChanges(true);
+};
 
 
-  const handleSave = async () => {
-    const newItems = inputs.filter((item) => item.trim() !== '');
-    const updatedExisting = existingCategories.filter((item) => item.trim() !== '');
-    const updated = [...updatedExisting, ...newItems];
 
-    try {
-      await AsyncStorage.setItem(`categories_${type}`, JSON.stringify(updated));
-      setExistingCategories(updated);
-      setInputs([]);
-      setHasChanges(false);
-      Alert.alert('Success', 'Categories saved!');
-      navigation.goBack();
-    } catch (error) {
-      console.error('Save failed', error);
-    }
-  };
+const handleSave = async () => {
+  const cleaned = categories
+    .filter(item => item.name.trim() !== '')
+    .map(item => ({
+      id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
+      name: item.name.trim(),
+      amount: item.amount || 0,
+    }));
+
+  try {
+    await AsyncStorage.setItem(`categories_${type}`, JSON.stringify(cleaned));
+    setCategories(cleaned);
+    setHasChanges(false);
+    Alert.alert('Success', 'Categories saved!');
+    navigation.goBack();
+  } catch (error) {
+    console.error('Save failed', error);
+  }
+};
+
 
 
   return (
@@ -77,35 +92,27 @@ useEffect(() => {
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#A4C0CF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Edit {name || type} Account</Text>
+          <Text style={styles.headerTitle}>Edit {type} Account</Text>
           <View style={{ width: 24 }} />
         </View>
       </View>
 
       <Text style={styles.trackertype}>Personal Budget Tracker</Text>
-      <Text style={styles.incometext}>{name || type}</Text>
+      <Text style={styles.incometext}>{type}</Text>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content}>
           {/* Existing Categories */}
-          {existingCategories.length > 0 ? (
-            existingCategories.map((item, index) => (
+          {categories.length > 0 ? (
+            categories.map((item, index) => (
               <TextInput
                 key={index}
                 style={styles.input}
-                value={item}
-                onChangeText={(text) => {
-                  const updated = [...existingCategories];
-                  if (updated[index] !== text) {
-                    updated[index] = text;
-                    setExistingCategories(updated);
-                    setHasChanges(true);
-                  }
-                }}
-
-
+                value={item.name}
+                placeholder="Enter category name"
+                onChangeText={(text) => handleChange(text, index)}
               />
             ))
           ) : (
@@ -113,16 +120,6 @@ useEffect(() => {
           )}
 
 
-          {/* Input Fields */}
-          {inputs.map((value, index) => (
-            <TextInput
-              key={index}
-              placeholder="Enter category name"
-              style={styles.input}
-              value={value}
-              onChangeText={(text) => handleChange(text, index)}
-            />
-          ))}
 
           {/* Add Field Button */}
           <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
