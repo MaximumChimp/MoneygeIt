@@ -13,10 +13,28 @@ import { useNavigation } from '@react-navigation/native';
 export default function MoreScreen() {
   const navigation = useNavigation();
 
-  const options = [
-    { label: 'Categories', icon: 'grid-outline', screen: 'CategoriesScreen' },
-    { label: 'Accounts', icon: 'wallet-outline', screen: 'AccountsScreen' },
-    { label: 'Currency', icon: 'cash-outline', screen: 'CurrencyScreen' },
+  const sections = [
+    {
+      title: 'Manage',
+      data: [
+        { label: 'Categories', icon: 'grid-outline', screen: 'CategoriesScreen' },
+        { label: 'Accounts', icon: 'wallet-outline', screen: 'AccountDetailScreen' },
+        { label: 'Tracker', icon: 'stats-chart-outline', screen: 'TrackerScreen' },
+      ],
+    },
+    {
+      title: 'Profile',
+      data: [
+        { label: 'User Profile', icon: 'person-outline', screen: 'UserProfileScreen' },
+      ],
+    },
+    {
+      title: 'System Configuration',
+      data: [
+        { label: 'Currency', icon: 'cash-outline', screen: 'CurrencyScreen' },
+        { label: 'Cloud Sync', icon: 'cloud-upload-outline', screen: 'CloudSyncScreen' },
+      ],
+    },
   ];
 
   return (
@@ -25,16 +43,23 @@ export default function MoreScreen() {
         <Text style={styles.headerText}>More</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.grid}>
-        {options.map((option, index) => (
-          <TouchableOpacity
-            key={index}
-            style={styles.card}
-            onPress={() => navigation.navigate(option.screen)}
-          >
-            <Ionicons name={option.icon} size={28} color="#145C84" />
-            <Text style={styles.label}>{option.label}</Text>
-          </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        {sections.map((section, sectionIndex) => (
+          <View key={sectionIndex} style={styles.section}>
+            <Text style={styles.sectionTitle}>{section.title}</Text>
+            <View style={styles.grid}>
+              {section.data.map((option, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.card}
+                  onPress={() => navigation.navigate(option.screen)}
+                >
+                  <Ionicons name={option.icon} size={28} color="#145C84" />
+                  <Text style={styles.label}>{option.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
         ))}
       </ScrollView>
     </SafeAreaView>
@@ -58,15 +83,31 @@ const styles = StyleSheet.create({
     color: '#A4C0CF',
   },
 
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+  scrollContainer: {
     padding: 20,
+    paddingBottom: 40,
   },
 
+  section: {
+    marginBottom: 32,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#145C84',
+    marginBottom: 12,
+  },
+
+grid: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  justifyContent: 'flex-start', // ✅ Align items starting from the left
+  rowGap: 16,
+  columnGap: '4%', // Optional: space between cards
+},
+
   card: {
-    width: '47%',
+    width: '30%',
     aspectRatio: 1,
     borderRadius: 12,
     backgroundColor: '#f2f2f2',
@@ -78,7 +119,7 @@ const styles = StyleSheet.create({
   },
   label: {
     marginTop: 8,
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '600',
     color: '#333',
     textAlign: 'center',
