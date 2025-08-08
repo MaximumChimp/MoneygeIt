@@ -14,85 +14,77 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
-export default function EditAccountScreen({ navigation, route }) {
-const { type, accounts } = route.params;
-const [existingCategories, setExistingCategories] = useState([]);
-const [inputs, setInputs] = useState([]);
-const [categories, setCategories] = useState([]);
-const [hasChanges, setHasChanges] = useState(false);
+export default function EditCategoriesScreen({ navigation, route }) {
+  const { type, categories: passedCategories } = route.params;
+  const [categories, setCategories] = useState([]);
+  const [hasChanges, setHasChanges] = useState(false);
 
-
-useEffect(() => {
-const loadCategoriesByType = async () => {
-  try {
-    const json = await AsyncStorage.getItem('all_accounts');
-    const grouped = json ? JSON.parse(json) : {};
-    const current = grouped[type] || [];
-    setCategories(current);
-  } catch (error) {
-    console.error('Failed to load grouped categories:', error);
-  }
-};
-
-  loadCategoriesByType();
-}, [type, accounts]);
-
-const handleAddField = () => {
-  setCategories([...categories, {
-    id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
-    name: '',
-    amount: 0,
-  }]);
-  setHasChanges(true);
-};
-
-
-  const handleChange = (text, index) => {
-  const newCategories = [...categories];
-  newCategories[index] = {
-    ...newCategories[index],
-    name: text,
-  };
-  setCategories(newCategories);
-  setHasChanges(true);
-};
-
-
-
-const handleSave = async () => {
-  const cleaned = categories
-    .filter(item => item.name.trim() !== '')
-    .map(item => ({
-      id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
-      name: item.name.trim(),
-      amount: item.amount || 0,
-    }));
-
-  try {
-    // Step 1: Get existing grouped categories
-    const json = await AsyncStorage.getItem('all_accounts');
-    const existing = json ? JSON.parse(json) : {};
-
-    // Step 2: Update the current type group
-    const updated = {
-      ...existing,
-      [type]: cleaned,
+  useEffect(() => {
+    const loadCategoriesByType = async () => {
+      try {
+        const json = await AsyncStorage.getItem('all_categories');
+        const grouped = json ? JSON.parse(json) : {};
+        const current = grouped[type] || [];
+        setCategories(current);
+      } catch (error) {
+        console.error('Failed to load grouped categories:', error);
+      }
     };
 
-    // Step 3: Save back the updated grouped data
-    await AsyncStorage.setItem('all_accounts', JSON.stringify(updated));
+    loadCategoriesByType();
+  }, [type]);
 
-    setCategories(cleaned);
-    setHasChanges(false);
-    Alert.alert('Success', 'Account saved!');
-    navigation.goBack();
-  } catch (error) {
-    console.error('Save failed', error);
-    Alert.alert('Error', 'Failed to save Account.');
-  }
-};
+  const handleAddField = () => {
+    setCategories([
+      ...categories,
+      {
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
+        name: '',
+        amount: 0,
+      },
+    ]);
+    setHasChanges(true);
+  };
 
+  const handleChange = (text, index) => {
+    const newCategories = [...categories];
+    newCategories[index] = {
+      ...newCategories[index],
+      name: text,
+    };
+    setCategories(newCategories);
+    setHasChanges(true);
+  };
 
+  const handleSave = async () => {
+    const cleaned = categories
+      .filter(item => item.name.trim() !== '')
+      .map(item => ({
+        id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
+        name: item.name.trim(),
+        amount: item.amount || 0,
+      }));
+
+    try {
+      const json = await AsyncStorage.getItem('all_categories');
+      const existing = json ? JSON.parse(json) : {};
+
+      const updated = {
+        ...existing,
+        [type]: cleaned,
+      };
+
+      await AsyncStorage.setItem('all_categories', JSON.stringify(updated));
+
+      setCategories(cleaned);
+      setHasChanges(false);
+      Alert.alert('Success', 'Categories saved!');
+      navigation.goBack();
+    } catch (error) {
+      console.error('Save failed', error);
+      Alert.alert('Error', 'Failed to save categories.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -102,46 +94,42 @@ const handleSave = async () => {
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#A4C0CF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Edit {type} Account</Text>
+          <Text style={styles.headerTitle}>Edit {type} Categories</Text>
           <View style={{ width: 24 }} />
         </View>
       </View>
 
       <Text style={styles.trackertype}>Personal Budget Tracker</Text>
       <Text style={styles.incometext}>{type}</Text>
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content}>
-          {/* Existing Categories */}
           {categories.length > 0 ? (
             categories.map((item, index) => (
               <TextInput
-                key={index}
+                key={item.id || index}
                 style={styles.input}
                 value={item.name}
-                placeholder="Enter account name"
+                placeholder="Enter category name"
                 onChangeText={(text) => handleChange(text, index)}
               />
             ))
           ) : (
-            <Text style={styles.fallback}>No accounts added yet.</Text>
+            <Text style={styles.fallback}>No categories added yet.</Text>
           )}
 
-
-
-          {/* Add Field Button */}
           <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
             <Ionicons name="add-circle-outline" size={20} color="#145C84" />
-            <Text style={styles.addButtonText}>Add Account</Text>
+            <Text style={styles.addButtonText}>Add Category</Text>
           </TouchableOpacity>
         </ScrollView>
 
-        {/* Save Button at Bottom */}
         {hasChanges && (
           <TouchableOpacity onPress={handleSave} style={styles.saveButton}>
-            <Text style={styles.saveButtonText}>Save Account</Text>
+            <Text style={styles.saveButtonText}>Save Categories</Text>
           </TouchableOpacity>
         )}
       </KeyboardAvoidingView>
@@ -187,8 +175,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#EDEDEE',
     padding: 10,
     fontSize: 14,
-    fontWeight:"bold",
-    color:"#19445C"
+    fontWeight: 'bold',
+    color: '#19445C',
   },
 
   fallback: {
@@ -229,19 +217,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: 'bold',
     fontSize: 16,
-  },
-
-  categoryRow: {
-    borderBottomWidth:1,
-    borderBottomColor:"#145C84",
-    padding: 10,
-    borderRadius: 6,
-    marginBottom: 8,
-  },
-
-  categoryText: {
-    color: '#333',
-    fontSize: 14.5,
   },
 
   content: {

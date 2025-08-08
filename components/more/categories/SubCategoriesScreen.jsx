@@ -14,84 +14,95 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
-export default function EditAccountScreen({ navigation, route }) {
-const { type, accounts } = route.params;
-const [existingCategories, setExistingCategories] = useState([]);
-const [inputs, setInputs] = useState([]);
-const [categories, setCategories] = useState([]);
-const [hasChanges, setHasChanges] = useState(false);
+export default function SubcategoriesScreen({ navigation, route }) {
+  const { parentCategory, parentType } = route.params;
+  const [subcategories, setSubcategories] = useState([]);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const storageKey = `subcategories_${parentCategory.id}`;
+
+  useEffect(() => {
+  const loadSubcategories = async () => {
+    try {
+      const allData = await AsyncStorage.getItem('all_categories');
+      const parsed = allData ? JSON.parse(allData) : {};
+
+      const categories = parsed[parentType] || [];
+      const parent = categories.find((cat) => cat.id === parentCategory.id);
+
+      setSubcategories(parent?.subcategories || []);
+    } catch (error) {
+      console.error('Failed to load subcategories:', error);
+    }
+  };
+
+  loadSubcategories();
+}, []);
 
 
-useEffect(() => {
-const loadCategoriesByType = async () => {
-  try {
-    const json = await AsyncStorage.getItem('all_accounts');
-    const grouped = json ? JSON.parse(json) : {};
-    const current = grouped[type] || [];
-    setCategories(current);
-  } catch (error) {
-    console.error('Failed to load grouped categories:', error);
-  }
-};
-
-  loadCategoriesByType();
-}, [type, accounts]);
-
-const handleAddField = () => {
-  setCategories([...categories, {
-    id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
-    name: '',
-    amount: 0,
-  }]);
-  setHasChanges(true);
-};
-
+  const handleAddField = () => {
+    setSubcategories([
+      ...subcategories,
+      {
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
+        name: '',
+      },
+    ]);
+    setHasChanges(true);
+  };
 
   const handleChange = (text, index) => {
-  const newCategories = [...categories];
-  newCategories[index] = {
-    ...newCategories[index],
-    name: text,
+    const newSubs = [...subcategories];
+    newSubs[index] = {
+      ...newSubs[index],
+      name: text,
+    };
+    setSubcategories(newSubs);
+    setHasChanges(true);
   };
-  setCategories(newCategories);
-  setHasChanges(true);
-};
-
-
 
 const handleSave = async () => {
-  const cleaned = categories
+  const cleaned = subcategories
     .filter(item => item.name.trim() !== '')
     .map(item => ({
       id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
       name: item.name.trim(),
-      amount: item.amount || 0,
     }));
 
   try {
-    // Step 1: Get existing grouped categories
-    const json = await AsyncStorage.getItem('all_accounts');
-    const existing = json ? JSON.parse(json) : {};
+    // 1. Load all categories
+    const allData = await AsyncStorage.getItem('all_categories');
+    const parsed = allData ? JSON.parse(allData) : {};
 
-    // Step 2: Update the current type group
-    const updated = {
-      ...existing,
-      [type]: cleaned,
-    };
+    // 2. Update the correct category inside the correct type group
+    const updatedCategories = (parsed[parentType] || []).map(cat => {
+      if (cat.id === parentCategory.id) {
+        return {
+          ...cat,
+          subcategories: cleaned,
+        };
+      }
+      return cat;
+    });
 
-    // Step 3: Save back the updated grouped data
-    await AsyncStorage.setItem('all_accounts', JSON.stringify(updated));
+    // 3. Save it back
+    await AsyncStorage.setItem(
+      'all_categories',
+      JSON.stringify({
+        ...parsed,
+        [parentType]: updatedCategories,
+      })
+    );
 
-    setCategories(cleaned);
+    setSubcategories(cleaned);
     setHasChanges(false);
-    Alert.alert('Success', 'Account saved!');
+    Alert.alert('Success', 'Subcategories saved!');
     navigation.goBack();
   } catch (error) {
     console.error('Save failed', error);
-    Alert.alert('Error', 'Failed to save Account.');
+    Alert.alert('Error', 'Failed to save subcategories.');
   }
 };
-
 
 
   return (
@@ -102,46 +113,41 @@ const handleSave = async () => {
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#A4C0CF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Edit {type} Account</Text>
+          <Text style={styles.headerTitle}>{parentCategory.name} Subcategories</Text>
           <View style={{ width: 24 }} />
         </View>
       </View>
 
       <Text style={styles.trackertype}>Personal Budget Tracker</Text>
-      <Text style={styles.incometext}>{type}</Text>
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content}>
-          {/* Existing Categories */}
-          {categories.length > 0 ? (
-            categories.map((item, index) => (
+          {subcategories.length > 0 ? (
+            subcategories.map((item, index) => (
               <TextInput
-                key={index}
+                key={item.id || index}
                 style={styles.input}
                 value={item.name}
-                placeholder="Enter account name"
+                placeholder="Enter subcategory name"
                 onChangeText={(text) => handleChange(text, index)}
               />
             ))
           ) : (
-            <Text style={styles.fallback}>No accounts added yet.</Text>
+            <Text style={styles.fallback}>No subcategories added yet.</Text>
           )}
 
-
-
-          {/* Add Field Button */}
           <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
             <Ionicons name="add-circle-outline" size={20} color="#145C84" />
-            <Text style={styles.addButtonText}>Add Account</Text>
+            <Text style={styles.addButtonText}>Add Subcategory</Text>
           </TouchableOpacity>
         </ScrollView>
 
-        {/* Save Button at Bottom */}
         {hasChanges && (
           <TouchableOpacity onPress={handleSave} style={styles.saveButton}>
-            <Text style={styles.saveButtonText}>Save Account</Text>
+            <Text style={styles.saveButtonText}>Save Subcategories</Text>
           </TouchableOpacity>
         )}
       </KeyboardAvoidingView>
@@ -183,14 +189,6 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
 
-  incometext: {
-    backgroundColor: '#EDEDEE',
-    padding: 10,
-    fontSize: 14,
-    fontWeight:"bold",
-    color:"#19445C"
-  },
-
   fallback: {
     textAlign: 'center',
     color: '#888',
@@ -229,19 +227,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: 'bold',
     fontSize: 16,
-  },
-
-  categoryRow: {
-    borderBottomWidth:1,
-    borderBottomColor:"#145C84",
-    padding: 10,
-    borderRadius: 6,
-    marginBottom: 8,
-  },
-
-  categoryText: {
-    color: '#333',
-    fontSize: 14.5,
   },
 
   content: {

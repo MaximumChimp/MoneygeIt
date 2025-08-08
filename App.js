@@ -14,6 +14,10 @@ import MoreScreen from './components/screens/MoreScreen';
 import AccountDetailScreen from './components/more/accounts/AccountDetailScreen';
 import EditAccountScreen from './components/more/accounts/EditAccountScreen';
 import SetupAccountScreen from './components/more/accounts/SetupAccountScreen';
+import CategoriesScreen from './components/more/categories/categoriesScreen';
+import EditCategoriesScreen from './components/more/categories/EditCategoriesScreen';
+import SubcategoriesScreen from './components/more/categories/SubCategoriesScreen';
+import CurrencyScreen from './components/more/currency/currencyScreen';
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 
@@ -101,6 +105,10 @@ export default function App() {
         <Stack.Screen name="AccountDetailScreen" component={AccountDetailScreen} />
         <Stack.Screen name='EditAccountScreen' component={EditAccountScreen}/>
         <Stack.Screen name='SetupAccountScreen' component={SetupAccountScreen}/>
+        <Stack.Screen name='CategoriesScreen' component={CategoriesScreen}/>
+        <Stack.Screen name='EditCategoriesScreen' component={EditCategoriesScreen}/>
+        <Stack.Screen name='SubcategoriesScreen' component={SubcategoriesScreen}/>
+        <Stack.Screen name='CurrencyScreen' component={CurrencyScreen}/>
       </Stack.Navigator>
     </NavigationContainer>
   );
