@@ -229,19 +229,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   name: {
+    color:'#386681',
     fontSize: 14,
   },
   balance: {
     fontSize: 14,
     color: '#0076CA',
   },
-  fallbackText: {
-    fontStyle: 'italic',
+    fallbackText: {
+    fontSize: 13,
     color: '#999',
-    fontSize: 14,
-    marginTop: 4,
-    marginBottom: 8,
+    marginTop: 8,
+    marginLeft: 16,
   },
+
   toggleText: {
     textAlign: 'center',
     color: '#0076CA',

@@ -104,6 +104,50 @@ const handleSave = async () => {
   }
 };
 
+ const handleDelete = (indexToDelete) => {
+    Alert.alert(
+      'Delete Subcategory',
+      'Are you sure you want to delete this subcategory?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updatedSubs = subcategories.filter((_, idx) => idx !== indexToDelete);
+              setSubcategories(updatedSubs);
+              setHasChanges(true);
+
+              // Update AsyncStorage immediately
+              const allData = await AsyncStorage.getItem('all_categories');
+              const parsed = allData ? JSON.parse(allData) : {};
+
+              const updatedCategories = (parsed[parentType] || []).map(cat => {
+                if (cat.id === parentCategory.id) {
+                  return {
+                    ...cat,
+                    subcategories: updatedSubs,
+                  };
+                }
+                return cat;
+              });
+
+              await AsyncStorage.setItem('all_categories', JSON.stringify({
+                ...parsed,
+                [parentType]: updatedCategories,
+              }));
+            } catch (error) {
+              console.error('Failed to delete subcategory:', error);
+              Alert.alert('Error', 'Failed to delete the subcategory.');
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -127,13 +171,21 @@ const handleSave = async () => {
         <ScrollView contentContainerStyle={styles.content}>
           {subcategories.length > 0 ? (
             subcategories.map((item, index) => (
-              <TextInput
-                key={item.id || index}
-                style={styles.input}
-                value={item.name}
-                placeholder="Enter subcategory name"
-                onChangeText={(text) => handleChange(text, index)}
-              />
+              <View key={item.id || index} style={styles.subcategoryRow}>
+                <TextInput
+                  style={styles.input}
+                  value={item.name}
+                  placeholder="Enter subcategory name"
+                  onChangeText={(text) => handleChange(text, index)}
+                />
+                <TouchableOpacity
+                  onPress={() => handleDelete(index)}
+                  style={styles.deleteIcon}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#145C84" />
+                </TouchableOpacity>
+              </View>
             ))
           ) : (
             <Text style={styles.fallback}>No subcategories added yet.</Text>
@@ -154,6 +206,7 @@ const handleSave = async () => {
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
@@ -233,4 +286,26 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
+  subcategoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderColor: '#ccc',
+    marginBottom: 12,
+    paddingVertical: 6,
+  },
+
+  input: {
+    flex: 1,
+    fontSize: 14.5,
+    paddingVertical: 6,
+    paddingHorizontal: 0,
+    borderBottomWidth: 0,
+  },
+
+  deleteIcon: {
+    marginLeft: 8,
+    paddingVertical: 6,
+  },
+
 });

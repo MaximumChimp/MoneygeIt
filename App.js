@@ -1,11 +1,17 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Image, StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as SplashScreen from 'expo-splash-screen';
 
-// Screens
+
+// Prevent Expo from hiding splash automatically 
+SplashScreen.hide()
+
+// Import your screens
 import LogsScreen from './components/screens/LogsScreen';
 import AnalyticsScreen from './components/screens/AnalyticsScreen';
 import AddExpenseScreen from './components/screens/AddExpenseScreen';
@@ -18,6 +24,16 @@ import CategoriesScreen from './components/more/categories/categoriesScreen';
 import EditCategoriesScreen from './components/more/categories/EditCategoriesScreen';
 import SubcategoriesScreen from './components/more/categories/SubCategoriesScreen';
 import CurrencyScreen from './components/more/currency/currencyScreen';
+import EditLogScreen from './components/logs/EditLogScreen';
+import UserProfileScreen from './components/UserProfile/UserProfileScreen';
+import RegisterScreen from './components/Authentication/RegisterScreen';
+import ChangeNameScreen from './components/Authentication/ChangenameScreen';
+import UserAccountScreen from './components/Authentication/UserAccountScreen';
+import CloudSyncScreen from './components/sync/CloudSyncScreen';
+import TrackerScreen from './components/Tracker/TrackerScreen';
+import AddSharedTrackerScreen from './components/Tracker/AddSharedTrackerScreen';
+import EditSharedTrackerScreen from './components/Tracker/EditSharedTrackerScreen';
+import { TrackerProvider } from './components/context/TrackerContext';
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 
@@ -84,7 +100,7 @@ function MainTabs() {
             >
               <View style={styles.cutoutButton}>
                 <View style={styles.innerCircle}>
-                  <Ionicons name="add" size={32} color="#FFFFFF" />
+                  <Ionicons name="add" size={32} color="#F5F5F5" />
                 </View>
               </View>
             </TouchableOpacity>
@@ -97,20 +113,57 @@ function MainTabs() {
   );
 }
 
+// Custom SplashScreen Component
+function CustomSplash({ navigation }) {
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      await SplashScreen.hideAsync();
+      navigation.replace('MainTabs');
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <LinearGradient
+      colors={['#145C84', '#145C84']}
+      style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+    >
+      <StatusBar barStyle="light-content" backgroundColor="#145C84" />
+      <Image
+        source={require('./assets/MONEYGEIT_ICON.png')}
+        style={{ width: 200, height: 200 }}
+        resizeMode="contain"
+      />
+    </LinearGradient>
+  );
+}
+
 export default function App() {
   return (
+    <TrackerProvider>
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator initialRouteName="Splash" screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Splash" component={CustomSplash} />
         <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen name="EditLogScreen" component={EditLogScreen} />
         <Stack.Screen name="AccountDetailScreen" component={AccountDetailScreen} />
-        <Stack.Screen name='EditAccountScreen' component={EditAccountScreen}/>
-        <Stack.Screen name='SetupAccountScreen' component={SetupAccountScreen}/>
-        <Stack.Screen name='CategoriesScreen' component={CategoriesScreen}/>
-        <Stack.Screen name='EditCategoriesScreen' component={EditCategoriesScreen}/>
-        <Stack.Screen name='SubcategoriesScreen' component={SubcategoriesScreen}/>
-        <Stack.Screen name='CurrencyScreen' component={CurrencyScreen}/>
+        <Stack.Screen name="EditAccountScreen" component={EditAccountScreen} />
+        <Stack.Screen name="SetupAccountScreen" component={SetupAccountScreen} />
+        <Stack.Screen name="CategoriesScreen" component={CategoriesScreen} />
+        <Stack.Screen name="EditCategoriesScreen" component={EditCategoriesScreen} />
+        <Stack.Screen name="SubcategoriesScreen" component={SubcategoriesScreen} />
+        <Stack.Screen name="CurrencyScreen" component={CurrencyScreen} />
+        <Stack.Screen name="UserProfileScreen" component={UserProfileScreen} />
+        <Stack.Screen name="RegisterScreen" component={RegisterScreen} />
+        <Stack.Screen name="ChangeNameScreen" component={ChangeNameScreen} />
+        <Stack.Screen name="UserAccountScreen" component={UserAccountScreen} />
+        <Stack.Screen name="CloudSyncScreen" component={CloudSyncScreen} />
+        <Stack.Screen name="TrackerScreen" component={TrackerScreen} />
+        <Stack.Screen name="AddSharedTrackerScreen" component={AddSharedTrackerScreen} />
+        <Stack.Screen name="EditSharedTrackerScreen" component={EditSharedTrackerScreen} />
       </Stack.Navigator>
     </NavigationContainer>
+    </TrackerProvider>
   );
 }
 
@@ -145,8 +198,7 @@ const styles = StyleSheet.create({
     height: 50,
     borderRadius: 25,
     backgroundColor: '#145C84',
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
+    borderColor: '#F5F5F5',
     justifyContent: 'center',
     alignItems: 'center',
   },

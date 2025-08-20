@@ -86,7 +86,40 @@ export default function EditCategoriesScreen({ navigation, route }) {
     }
   };
 
-  return (
+   const handleDelete = (indexToDelete) => {
+    Alert.alert(
+      'Delete Category',
+      'Are you sure you want to delete this category?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updatedCategories = categories.filter(
+                (_, idx) => idx !== indexToDelete
+              );
+              setCategories(updatedCategories);
+              setHasChanges(true);
+
+              // Update AsyncStorage immediately
+              const json = await AsyncStorage.getItem('all_categories');
+              const existing = json ? JSON.parse(json) : {};
+              existing[type] = updatedCategories;
+              await AsyncStorage.setItem('all_categories', JSON.stringify(existing));
+            } catch (error) {
+              console.error('Failed to delete category:', error);
+              Alert.alert('Error', 'Failed to delete the category.');
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+ return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.headerBackground}>
@@ -109,13 +142,21 @@ export default function EditCategoriesScreen({ navigation, route }) {
         <ScrollView contentContainerStyle={styles.content}>
           {categories.length > 0 ? (
             categories.map((item, index) => (
-              <TextInput
-                key={item.id || index}
-                style={styles.input}
-                value={item.name}
-                placeholder="Enter category name"
-                onChangeText={(text) => handleChange(text, index)}
-              />
+              <View key={item.id || index} style={styles.categoryRow}>
+                <TextInput
+                  style={styles.input}
+                  value={item.name}
+                  placeholder="Enter category name"
+                  onChangeText={(text) => handleChange(text, index)}
+                />
+                <TouchableOpacity
+                  onPress={() => handleDelete(index)}
+                  style={styles.deleteIcon}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#145C84" />
+                </TouchableOpacity>
+              </View>
             ))
           ) : (
             <Text style={styles.fallback}>No categories added yet.</Text>
@@ -135,6 +176,7 @@ export default function EditCategoriesScreen({ navigation, route }) {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+
 }
 
 const styles = StyleSheet.create({
@@ -223,4 +265,28 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
+  
+categoryRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  borderBottomWidth: 1,
+  borderColor: '#ccc',
+  marginBottom: 12,
+  paddingVertical: 6,      
+},
+
+input: {
+  flex: 1,
+  fontSize: 14.5,
+  paddingVertical: 6,      
+  paddingHorizontal: 0,     
+  borderBottomWidth: 0,    
+},
+
+deleteIcon: {
+  marginLeft: 8,
+  paddingVertical: 6,      
+},
+
+
 });

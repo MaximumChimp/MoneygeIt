@@ -8,11 +8,11 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from '@react-navigation/native';
-import DateTimePicker from '@react-native-community/datetimepicker'; // <-- Make sure to install this
+import { useFocusEffect,useNavigation } from '@react-navigation/native';
+import DateTimePicker from '@react-native-community/datetimepicker'; 
 import { Ionicons } from '@expo/vector-icons';
-
 export default function LogsScreen() {
+  const navigation = useNavigation();
   const [expenses, setExpenses] = useState([]);
   const [filteredExpenses, setFilteredExpenses] = useState([]);
   const [filter, setFilter] = useState('Daily');
@@ -20,7 +20,8 @@ export default function LogsScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [history, setHistory] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
-  const [currencySymbol, setCurrencySymbol] = useState('{currencySymbol}');
+  const [currencySymbol, setCurrencySymbol] = useState('₱');
+  
   useFocusEffect(
     React.useCallback(() => {
       setFilter('Daily');
@@ -190,46 +191,50 @@ const handlePrevDate = () => {
   setSelectedDate(newDate);
 };
 const renderItem = ({ item }) => {
-  let amountColor = "#888";
-  if (item.type === "Income") amountColor = "#0076CA";
-  else if (item.type === "Expenses") amountColor = "#E98898";
-  else if (item.type === "Transfer") amountColor = "#999999"; // neutral gray
+    let amountColor = "#888";
+    if (item.type === "Income") amountColor = "#0076CA";
+    else if (item.type === "Expenses") amountColor = "#E98898";
+    else if (item.type === "Transfer") amountColor = "#999999"; // neutral gray
 
-  return (
-    <View style={styles.card}>
-      <View style={styles.left}>
-        {item.type === "Transfer" ? (
-          <>
-            <Text style={styles.category}>
-              Transfer from: {item.from || 'N/A'}
-            </Text>
-            <Text style={styles.subcategory}>
-              Transfer to: {item.to || 'N/A'}
-            </Text>
-          </>
-        ) : (
-          <>
-            <Text style={styles.category}>{item.category}</Text>
-            <Text style={styles.subcategory}>{item.subcategory}</Text>
-          </>
-        )}
-      </View>
+    return (
+      <TouchableOpacity
+         onPress={() => navigation.navigate('EditLogScreen', { id: item.id })}
+      >
+        <View style={styles.card}>
+          <View style={styles.left}>
+            {item.type === "Transfer" ? (
+              <>
+                <Text style={styles.category}>
+                  Transfer from: {item.from || 'N/A'}
+                </Text>
+                <Text style={styles.subcategory}>
+                  Transfer to: {item.to || 'N/A'}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.category}>{item.category}</Text>
+                <Text style={styles.subcategory}>{item.subcategory}</Text>
+              </>
+            )}
+          </View>
 
-      <View style={styles.right}>
-        <Text style={[styles.transactionAmount, { color: amountColor }]}>
-          {currencySymbol} {Number(item.amount).toFixed(2)}
-        </Text>
-        <Text style={styles.date}>
-          {new Date(item.date).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })}
-        </Text>
-      </View>
-    </View>
-  );
-};
+          <View style={styles.right}>
+            <Text style={[styles.transactionAmount, { color: amountColor }]}>
+              {currencySymbol} {Number(item.amount).toFixed(2)}
+            </Text>
+            <Text style={styles.date}>
+              {new Date(item.date).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
 
 
@@ -272,7 +277,7 @@ const calculateTotal = (type) => {
       <View style={styles.headerBackground}>
         <Text style={styles.headerText}>Logs</Text>
       </View>
-
+      <Text style={styles.subHeader}>Personal Budget Tracker</Text>
       <View style={styles.filterRow}>
         {filters.map((f) => (
           <TouchableOpacity
@@ -292,7 +297,7 @@ const calculateTotal = (type) => {
         <TouchableOpacity onPress={handlePrevDate} style={{ marginHorizontal: 10 }}>
           <Ionicons name="chevron-back-outline" size={24} color="#145C84" />
         </TouchableOpacity>
-
+        
         <TouchableOpacity onPress={() => setShowPicker(true)}>
           <Text style={styles.dateText}>
           {formatDateLabel(filter, selectedDate)}
@@ -341,7 +346,7 @@ const calculateTotal = (type) => {
       </View>
 
       {history.length === 0 ? (
-        <Text style={styles.empty}>No transactions in your history yet.</Text>
+        <Text style={styles.fallbackText}>No transactions in your history yet.</Text>
       ) : (
         <FlatList
           contentContainerStyle={{ paddingTop: 10 }}
@@ -372,6 +377,15 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#A4C0CF',
   },
+  subHeader: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#6FB5DB',
+  textAlign: 'center',
+  paddingVertical: 10,
+  backgroundColor: '#EDEDEE',
+  marginBottom: 15,
+},
   filterRow: {
     flexDirection: 'row',
     justifyContent: 'space-evenly',
@@ -407,11 +421,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#145C84',
   },
-  empty: {
-    fontSize: 16,
+   fallbackText: {
+    fontSize: 13,
     color: '#999',
-    textAlign: 'center',
-    marginTop: 50,
+    marginTop: 8,
+    marginLeft: 26,
   },
 
   desc: {
