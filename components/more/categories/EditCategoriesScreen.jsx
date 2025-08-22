@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -7,119 +7,166 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ScrollView,
-  Alert,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  DeviceEventEmitter,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { TrackerContext } from '../../context/TrackerContext';
+import { db } from '../../../config/firebase-config';
+import { collection, doc, setDoc, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
 
 export default function EditCategoriesScreen({ navigation, route }) {
-  const { type, categories: passedCategories } = route.params;
+  const { type } = route.params;
+  const { trackerId, trackerName, userId } = useContext(TrackerContext);
+
   const [categories, setCategories] = useState([]);
-  const [hasChanges, setHasChanges] = useState(false);
+  const isGuest = !userId;
+  const isShared = trackerId !== 'personal' && !isGuest;
 
+  /** ---------- Load categories ---------- */
   useEffect(() => {
-    const loadCategoriesByType = async () => {
-      try {
-        const json = await AsyncStorage.getItem('all_categories');
-        const grouped = json ? JSON.parse(json) : {};
-        const current = grouped[type] || [];
-        setCategories(current);
-      } catch (error) {
-        console.error('Failed to load grouped categories:', error);
-      }
-    };
-
-    loadCategoriesByType();
-  }, [type]);
-
-  const handleAddField = () => {
-    setCategories([
-      ...categories,
-      {
-        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
-        name: '',
-        amount: 0,
-      },
-    ]);
-    setHasChanges(true);
-  };
-
-  const handleChange = (text, index) => {
-    const newCategories = [...categories];
-    newCategories[index] = {
-      ...newCategories[index],
-      name: text,
-    };
-    setCategories(newCategories);
-    setHasChanges(true);
-  };
-
-  const handleSave = async () => {
-    const cleaned = categories
-      .filter(item => item.name.trim() !== '')
-      .map(item => ({
-        id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
-        name: item.name.trim(),
-        amount: item.amount || 0,
-      }));
-
-    try {
-      const json = await AsyncStorage.getItem('all_categories');
-      const existing = json ? JSON.parse(json) : {};
-
-      const updated = {
-        ...existing,
-        [type]: cleaned,
+    if (isGuest) {
+      const loadGuestCategories = async () => {
+        try {
+          const key = `guest_${trackerId}_${type}`;
+          const raw = await AsyncStorage.getItem(key);
+          const guestCats = raw ? JSON.parse(raw) : [];
+          setCategories(guestCats);
+        } catch (err) {
+          console.error('Failed to load guest categories:', err);
+        }
       };
+      loadGuestCategories();
+    } else {
+      // Real-time listener for shared tracker
+      const categoriesRef = collection(db, 'categories');
+      const q = query(categoriesRef, where('trackerId', '==', trackerId), where('type', '==', type));
+      const unsubscribe = onSnapshot(q, snapshot => {
+        const fetched = snapshot.docs.map(doc => ({ categoryId: doc.id, ...doc.data() }));
+        setCategories(fetched);
+      }, err => {
+        console.error('Failed to listen to categories:', err);
+      });
 
-      await AsyncStorage.setItem('all_categories', JSON.stringify(updated));
+      return () => unsubscribe();
+    }
+  }, [trackerId, userId]);
 
-      setCategories(cleaned);
-      setHasChanges(false);
-      Alert.alert('Success', 'Categories saved!');
-      navigation.goBack();
-    } catch (error) {
-      console.error('Save failed', error);
-      Alert.alert('Error', 'Failed to save categories.');
+  /** ---------- Add new category ---------- */
+  const handleAddField = () => {
+    const newCat = { categoryId: `temp_${Date.now()}`, name: '' };
+    setCategories(prev => [...prev, newCat]);
+
+    if (isGuest) {
+      emitGuestUpdate([...categories, newCat]);
     }
   };
 
-   const handleDelete = (indexToDelete) => {
-    Alert.alert(
-      'Delete Category',
-      'Are you sure you want to delete this category?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updatedCategories = categories.filter(
-                (_, idx) => idx !== indexToDelete
-              );
-              setCategories(updatedCategories);
-              setHasChanges(true);
+  /** ---------- Update category ---------- */
+  const handleChange = (value, index) => {
+    const updatedCategories = [...categories];
+    updatedCategories[index].name = value;
+    setCategories(updatedCategories);
 
-              // Update AsyncStorage immediately
-              const json = await AsyncStorage.getItem('all_categories');
-              const existing = json ? JSON.parse(json) : {};
-              existing[type] = updatedCategories;
-              await AsyncStorage.setItem('all_categories', JSON.stringify(existing));
-            } catch (error) {
-              console.error('Failed to delete category:', error);
-              Alert.alert('Error', 'Failed to delete the category.');
-            }
-          },
-        },
-      ],
-      { cancelable: true }
-    );
+    if (isGuest) {
+      emitGuestUpdate(updatedCategories);
+    }
   };
 
- return (
+  /** ---------- Delete category ---------- */
+  const handleDelete = async (index) => {
+    const catToDelete = categories[index];
+    const updatedCategories = categories.filter((_, i) => i !== index);
+
+    try {
+      if (isGuest) {
+        const key = `guest_${trackerId}_${type}`;
+        const raw = await AsyncStorage.getItem(key);
+        const guestCats = (raw ? JSON.parse(raw) : []).filter(c => c.categoryId !== catToDelete.categoryId);
+        await AsyncStorage.setItem(key, JSON.stringify(guestCats));
+        setCategories(guestCats);
+        DeviceEventEmitter.emit('guestCategoriesUpdated', { type, updatedCategories: guestCats });
+      } else {
+        if (catToDelete.categoryId && !catToDelete.categoryId.startsWith('temp_')) {
+          await deleteDoc(doc(db, 'categories', catToDelete.categoryId));
+        }
+        setCategories(updatedCategories);
+      }
+    } catch (err) {
+      console.error('Failed to delete category:', err);
+      Alert.alert('Error', 'Could not delete category.');
+    }
+  };
+
+/** ---------- Save categories ---------- */
+const handleSave = async () => {
+  const validCategories = categories.filter(c => c.name?.trim());
+  if (!validCategories.length) {
+    return Alert.alert('Validation Error', 'Please add at least one category.');
+  }
+
+  try {
+    if (isGuest) {
+      // Assign categoryId if missing
+      const guestCategoriesWithId = validCategories.map(c => ({
+        ...c,
+        categoryId: c.categoryId || `temp_${Date.now()}_${Math.random()}`,
+      }));
+
+      const key = `guest_${trackerId}_${type}`;
+      await AsyncStorage.setItem(key, JSON.stringify(guestCategoriesWithId));
+      DeviceEventEmitter.emit('guestCategoriesUpdated', { type, updatedCategories: guestCategoriesWithId });
+    } else {
+      const collectionRef = collection(db, 'categories');
+      for (let cat of validCategories) {
+        let docRef;
+        if (!cat.categoryId || cat.categoryId.startsWith('temp_')) {
+          // New category → Firestore generates ID
+          docRef = doc(collectionRef);
+          cat.categoryId = docRef.id;
+        } else {
+          // Existing category
+          docRef = doc(db, 'categories', cat.categoryId);
+        }
+
+        await setDoc(docRef, {
+          userId,
+          trackerId,
+          name: cat.name.trim(),
+          type,
+        });
+      }
+    }
+
+    navigation.goBack();
+  } catch (err) {
+    console.error('Failed to save categories:', err);
+    Alert.alert('Error', 'Failed to save categories.');
+  }
+};
+
+
+  /** ---------- Helper for emitting guest updates ---------- */
+  const emitGuestUpdate = async (updatedCategories) => {
+    try {
+      const key = `guest_${trackerId}_${type}`;
+      await AsyncStorage.setItem(key, JSON.stringify(updatedCategories));
+      DeviceEventEmitter.emit('guestCategoriesUpdated', { type, updatedCategories });
+    } catch (err) {
+      console.error('Failed to emit guest update:', err);
+    }
+  };
+
+  const subHeaderText = isGuest
+    ? 'Guest Tracker'
+    : trackerId === 'personal'
+      ? 'Personal Budget Tracker'
+      : trackerName || 'Shared Tracker';
+
+  return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.headerBackground}>
@@ -132,34 +179,33 @@ export default function EditCategoriesScreen({ navigation, route }) {
         </View>
       </View>
 
-      <Text style={styles.trackertype}>Personal Budget Tracker</Text>
-      <Text style={styles.incometext}>{type}</Text>
+      <Text style={styles.trackertype}>{subHeaderText}</Text>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content}>
-          {categories.length > 0 ? (
-            categories.map((item, index) => (
-              <View key={item.id || index} style={styles.categoryRow}>
+          {categories.length === 0 ? (
+            <View style={styles.fallbackContainer}>
+              <Text style={styles.fallbackText}>
+                No categories created yet. Tap "Add Category" to get started.
+              </Text>
+            </View>
+          ) : (
+            categories.map((item, idx) => (
+              <View key={item.categoryId} style={styles.categoryRow}>
                 <TextInput
                   style={styles.input}
                   value={item.name}
-                  placeholder="Enter category name"
-                  onChangeText={(text) => handleChange(text, index)}
+                  placeholder="Category name"
+                  onChangeText={text => handleChange(text, idx)}
                 />
-                <TouchableOpacity
-                  onPress={() => handleDelete(index)}
-                  style={styles.deleteIcon}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
+                <TouchableOpacity onPress={() => handleDelete(idx)} style={styles.deleteIcon}>
                   <Ionicons name="trash-outline" size={20} color="#145C84" />
                 </TouchableOpacity>
               </View>
             ))
-          ) : (
-            <Text style={styles.fallback}>No categories added yet.</Text>
           )}
 
           <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
@@ -168,41 +214,31 @@ export default function EditCategoriesScreen({ navigation, route }) {
           </TouchableOpacity>
         </ScrollView>
 
-        {hasChanges && (
-          <TouchableOpacity onPress={handleSave} style={styles.saveButton}>
+        <View style={styles.fixedSaveContainer}>
+          <TouchableOpacity
+            onPress={handleSave}
+            style={[styles.saveButton, categories.every(c => !c.name?.trim()) && { backgroundColor: '#EDEDEE' }]}
+            disabled={categories.every(c => !c.name?.trim())}
+          >
             <Text style={styles.saveButtonText}>Save Categories</Text>
           </TouchableOpacity>
-        )}
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
-
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-
   headerBackground: {
     height: 100,
-    width: '100%',
     backgroundColor: '#145C84',
     justifyContent: 'flex-end',
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
-
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#A4C0CF',
-  },
-
+  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle: { fontSize: 16, fontWeight: 'bold', color: '#A4C0CF' },
   trackertype: {
     fontWeight: 'bold',
     color: '#6FB5DB',
@@ -212,81 +248,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#EDEDEE',
     marginBottom: 15,
   },
-
-  incometext: {
-    backgroundColor: '#EDEDEE',
-    padding: 10,
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#19445C',
-  },
-
-  fallback: {
-    textAlign: 'center',
-    color: '#888',
-    fontStyle: 'italic',
-    marginVertical: 10,
-  },
-
-  input: {
-    borderBottomWidth: 1,
-    borderColor: '#ccc',
-    paddingVertical: 8,
-    marginBottom: 12,
-    fontSize: 14.5,
-  },
-
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-
-  addButtonText: {
-    marginLeft: 6,
-    color: '#145C84',
-    fontSize: 14,
-  },
-
-  saveButton: {
-    backgroundColor: '#145C84',
-    padding: 16,
-    borderRadius: 0,
-  },
-
-  saveButtonText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-
-  content: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  
-categoryRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  borderBottomWidth: 1,
-  borderColor: '#ccc',
-  marginBottom: 12,
-  paddingVertical: 6,      
-},
-
-input: {
-  flex: 1,
-  fontSize: 14.5,
-  paddingVertical: 6,      
-  paddingHorizontal: 0,     
-  borderBottomWidth: 0,    
-},
-
-deleteIcon: {
-  marginLeft: 8,
-  paddingVertical: 6,      
-},
-
-
+  content: { padding: 16, paddingBottom: 32 },
+  categoryRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1, borderColor: '#ccc' },
+  input: { flex: 1, fontSize: 14.5, paddingVertical: 8, paddingHorizontal: 10 },
+  deleteIcon: { marginLeft: 12, justifyContent: 'center', alignItems: 'center', padding: 6 },
+  addButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  addButtonText: { marginLeft: 6, color: '#145C84', fontSize: 14 },
+  fixedSaveContainer: { padding: 16, backgroundColor: '#fff', borderTopWidth: 1, borderColor: '#ccc', alignItems: 'center' },
+  saveButton: { backgroundColor: '#145C84', padding: 16, width: '100%', borderRadius: 8 },
+  saveButtonText: { color: '#F7F2B3', textAlign: 'center', fontWeight: 'bold', fontSize: 16 },
+  fallbackContainer: { padding: 20, justifyContent: 'center', alignItems: 'center' },
+  fallbackText: { fontSize: 14, color: '#999', textAlign: 'center' },
 });

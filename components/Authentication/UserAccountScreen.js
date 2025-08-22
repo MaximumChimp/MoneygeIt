@@ -94,33 +94,41 @@ useEffect(() => {
     Alert.alert('Change Password', 'Change Password screen coming soon');
   };
 
-  const handleLogout = async () => {
-    setLoggingOut(true);
-    try {
-      // Grab userId before it disappears so we can clear per-user keys too
-      const storedUserId = await AsyncStorage.getItem('userId');
+const handleLogout = async () => {
+  setLoggingOut(true);
+  try {
+    // Grab userId before it disappears so we can clear per-user keys too
+    const storedUserId = await AsyncStorage.getItem("userId");
 
-      await signOut(auth);
-      setUser(null);
+    await signOut(auth);
+    setUser(null);
 
-      // Clean up local keys
-      const keys = ['userId', 'userEmail', 'sharedTrackers'];
-      if (storedUserId) {
-        keys.push(
-          `selectedTrackerId_${storedUserId}`,
-          `selectedTrackerName_${storedUserId}`
-        );
-      }
-      await AsyncStorage.multiRemove(keys);
-
-      navigation.replace('UserProfileScreen');
-    } catch (error) {
-      console.error('Logout error:', error);
-      Alert.alert('Error', 'Failed to log out');
-    } finally {
-      setLoggingOut(false);
+    // Clean up your own local keys
+    const keys = ["userId", "userEmail", "sharedTrackers"];
+    if (storedUserId) {
+      keys.push(
+        `selectedTrackerId_${storedUserId}`,
+        `selectedTrackerName_${storedUserId}`
+      );
     }
-  };
+    await AsyncStorage.multiRemove(keys);
+
+    // 🧹 Extra: Clear Firestore persistence so cache doesn’t leak between users
+    const allKeys = await AsyncStorage.getAllKeys();
+    const fsKeys = allKeys.filter((k) => k.startsWith("firestore/"));
+    if (fsKeys.length > 0) {
+      await AsyncStorage.multiRemove(fsKeys);
+      console.log("Cleared Firestore persistence keys:", fsKeys);
+    }
+
+    navigation.replace("UserProfileScreen");
+  } catch (error) {
+    console.error("Logout error:", error);
+    Alert.alert("Error", "Failed to log out");
+  } finally {
+    setLoggingOut(false);
+  }
+};
 
   if (loading)
     return (

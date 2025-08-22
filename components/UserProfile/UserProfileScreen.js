@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
 import { auth,db} from '../../config/firebase-config';
-import { getDoc, doc } from 'firebase/firestore';
+import { getDoc, doc,collection } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function UserProfileScreen({ navigation, route }) {

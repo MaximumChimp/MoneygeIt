@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useEffect, useState, useContext } from "react";
 import {
   View,
   Text,
@@ -7,151 +7,189 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import NetInfo from '@react-native-community/netinfo';
-import { TrackerContext } from '../../context/TrackerContext';
+  DeviceEventEmitter,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { doc, deleteDoc,setDoc} from "firebase/firestore";
+import { db } from "../../../config/firebase-config";
+import { TrackerContext } from "../../context/TrackerContext";
 
 export default function SetupAccountScreen({ navigation, route }) {
-  const { account, type } = route?.params || {};
-  const { trackerId, trackerName, isOnline, syncPendingAccounts } = useContext(TrackerContext);
+  const { trackerId, trackerName, userId, isGuest,isShared} = useContext(TrackerContext); 
+  const { account, type } = route.params || {};
+  const isEditing = !!account;
 
-  const passedName = account?.name || '';
-  const [selectedType, setSelectedType] = useState(type || 'Cash');
-  const [name, setName] = useState(passedName);
-  const [amount, setAmount] = useState(account?.amount?.toString() || '');
-  const [currencySymbol, setCurrencySymbol] = useState('₱');
-  const types = ['Cash', 'Banks', 'E-Wallets'];
+  const [selectedType, setSelectedType] = useState(type || "Cash");
+  const [name, setName] = useState(account?.name || "");
+  const [amount, setAmount] = useState(account?.amount?.toString() || "");
+  const [currencySymbol, setCurrencySymbol] = useState("₱");
+  const types = ["Cash", "Banks", "E-Wallets"];
 
-  const accountId = account?.id || `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-
-  useEffect(() => {
-    const fetchCurrencySymbol = async () => {
-      try {
-        const savedCurrency = await AsyncStorage.getItem('selectedCurrency');
-        if (savedCurrency) {
-          const parsed = JSON.parse(savedCurrency);
-          setCurrencySymbol(parsed.symbol);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    fetchCurrencySymbol();
-
-    const unsubscribe = NetInfo.addEventListener(state => {
-      // Optional: can also trigger a re-sync if needed
-    });
-    return () => unsubscribe();
+    useEffect(() => {
+    AsyncStorage.getItem("selectedCurrency")
+      .then((res) => {
+        if (res) setCurrencySymbol(JSON.parse(res).symbol || "₱");
+      })
+      .catch(console.error);
   }, []);
 
-  /** ---------- Save account ---------- */
-  const handleSave = async () => {
-    if (!name.trim()) return Alert.alert('Validation', 'Please enter an account name.');
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount)) return Alert.alert('Validation', 'Please enter a valid amount.');
 
-    const trimmedName = name.trim();
-    const accountData = {
-      id: accountId,
-      name: trimmedName,
-      amount: parsedAmount,
-      createdAt: account?.createdAt || new Date(),
-    };
+  // ---------- Fetch saved currency ----------
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener("currencyChanged", (newCurrency) => {
+      setCurrencySymbol(newCurrency.symbol); // updates immediately
+    });
 
-    try {
-      // ---------- AsyncStorage ----------
-      const accountsKey = `accounts_${trackerId}`;
-      const accountsJson = await AsyncStorage.getItem(accountsKey);
-      const accountsByType = accountsJson
-        ? JSON.parse(accountsJson)
-        : { Cash: [], Banks: [], 'E-Wallets': [] };
+    return () => subscription.remove();
+  }, []);
 
-      // Remove old account from all types
-      Object.keys(accountsByType).forEach(typeKey => {
-        accountsByType[typeKey] = (accountsByType[typeKey] || []).filter(acc => acc.id !== accountId);
-      });
+/** ---------- Save account ---------- */
+const handleUpdate = async () => {
+  if (!name.trim() || !amount.trim()) {
+    Alert.alert("Validation", "Please enter all fields.");
+    return;
+  }
 
-      // Add to selected type
-      accountsByType[selectedType] = [...(accountsByType[selectedType] || []), accountData];
-      await AsyncStorage.setItem(accountsKey, JSON.stringify(accountsByType));
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount)) {
+    Alert.alert("Validation", "Amount must be a number.");
+    return;
+  }
 
-      // ---------- Offline queue for shared trackers ----------
-      if (trackerId !== 'personal') {
-        const queueKey = `offline_accounts_queue_${trackerId}`;
-        const queueJson = await AsyncStorage.getItem(queueKey);
-        const queue = queueJson ? JSON.parse(queueJson) : [];
+  const accId = isEditing ? account.id : `acc_${Date.now()}`;
+  const oldType = isEditing ? (account.type || type) : selectedType;
 
-        // Remove old queued account if exists
-        const filteredQueue = queue.filter(q => q.account.id !== accountId);
-        filteredQueue.push({ type: selectedType, account: accountData });
-        await AsyncStorage.setItem(queueKey, JSON.stringify(filteredQueue));
+  const newAcc = {
+    id: accId,
+    name: name.trim(),
+    type: selectedType,
+    amount: parsedAmount,
+    updatedAt: Date.now(),
+  };
 
-        // Attempt immediate sync if online
-        if (isOnline) await syncPendingAccounts();
+  try {
+    if (isGuest) {
+      // Guest users (AsyncStorage)
+      if (isEditing && oldType !== selectedType) {
+        const oldKey = `guest_${trackerId}_${oldType}`;
+        const rawOld = await AsyncStorage.getItem(oldKey);
+        let oldAccounts = rawOld ? JSON.parse(rawOld) : [];
+        oldAccounts = oldAccounts.filter(a => a.id !== accId);
+        await AsyncStorage.setItem(oldKey, JSON.stringify(oldAccounts));
+        DeviceEventEmitter.emit("guestAccountsUpdated", { type: oldType, updatedAccounts: oldAccounts });
       }
 
-      Alert.alert('Success', 'Account saved!');
-      navigation.goBack();
-    } catch (err) {
-      console.error('Error saving account:', err);
-      Alert.alert('Error', 'Failed to save the account.');
+      const key = `guest_${trackerId}_${selectedType}`;
+      const raw = await AsyncStorage.getItem(key);
+      let accountsArr = raw ? JSON.parse(raw) : [];
+      accountsArr = [...accountsArr.filter(a => a.id !== accId), newAcc];
+      await AsyncStorage.setItem(key, JSON.stringify(accountsArr));
+      DeviceEventEmitter.emit("guestAccountsUpdated", { type: selectedType, updatedAccounts: accountsArr });
+
+      // Send only updated account back
+      route.params?.onUpdate?.({ oldType, newType: selectedType, updatedAccount: newAcc });
+
+    } else {
+      // Firebase users
+      const isShared = trackerId !== "personal";
+      const collectionPath = isShared
+        ? ["sharedTrackers", trackerId, selectedType]
+        : ["users", userId, "trackers", trackerId, selectedType];
+
+      if (isEditing && oldType !== selectedType) {
+        const oldPath = isShared
+          ? ["sharedTrackers", trackerId, oldType, accId]
+          : ["users", userId, "trackers", trackerId, oldType, accId];
+        await deleteDoc(doc(db, ...oldPath));
+      }
+
+      const ref = doc(db, ...collectionPath, accId);
+      await setDoc(ref, newAcc, { merge: true });
+
+      // Clear offline queue for this account
+      const queueKey = `offlineQueue_${trackerId}_${selectedType}`;
+      const queueJson = await AsyncStorage.getItem(queueKey);
+      let queue = queueJson ? JSON.parse(queueJson) : [];
+      queue = queue.filter(item => item.payload.id !== accId);
+      await AsyncStorage.setItem(queueKey, JSON.stringify(queue));
+
+      route.params?.onUpdate?.({ oldType, newType: selectedType, updatedAccount: newAcc });
     }
-  };
 
-  /** ---------- Delete account ---------- */
-  const handleDelete = async () => {
-    if (!account?.id) return;
+    Alert.alert("Success", "Account saved!");
+    navigation.goBack();
+  } catch (err) {
+    console.error("Failed to save account:", err);
+    Alert.alert("Error", "Could not save account.");
+  }
+};
 
-    Alert.alert('Delete Account', 'Are you sure you want to delete this account?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const accountsKey = `accounts_${trackerId}`;
-            const accountsJson = await AsyncStorage.getItem(accountsKey);
-            const accountsByType = accountsJson
-              ? JSON.parse(accountsJson)
-              : { Cash: [], Banks: [], 'E-Wallets': [] };
 
-            Object.keys(accountsByType).forEach(typeKey => {
-              accountsByType[typeKey] = (accountsByType[typeKey] || []).filter(acc => acc.id !== account.id);
-            });
 
-            await AsyncStorage.setItem(accountsKey, JSON.stringify(accountsByType));
 
-            if (trackerId !== 'personal') {
-              const queueKey = `offline_accounts_queue_${trackerId}`;
-              const queueJson = await AsyncStorage.getItem(queueKey);
-              const queue = queueJson ? JSON.parse(queueJson) : [];
-              const filteredQueue = queue.filter(q => q.account.id !== account.id);
-              await AsyncStorage.setItem(queueKey, JSON.stringify(filteredQueue));
 
-              if (isOnline) await syncPendingAccounts();
-            }
+/** ---------- Delete account ---------- */
+const handleDelete = async () => {
+  if (!isEditing) return;
+  const accId = account?.id;
 
-            Alert.alert('Deleted', 'Account deleted successfully.');
-            navigation.goBack();
-          } catch (err) {
-            console.error(err);
-            Alert.alert('Error', 'Failed to delete account.');
+  Alert.alert("Confirm Delete", "Are you sure you want to delete this account?", [
+    { text: "Cancel", style: "cancel" },
+    {
+      text: "Delete",
+      style: "destructive",
+      onPress: async () => {
+        try {
+          if (isGuest) {
+            // Guest: remove from AsyncStorage
+            const key = `guest_${trackerId}_${selectedType}`;
+            const raw = await AsyncStorage.getItem(key);
+            let accountsArr = raw ? JSON.parse(raw) : [];
+            accountsArr = accountsArr.filter(a => a.id !== accId);
+            await AsyncStorage.setItem(key, JSON.stringify(accountsArr));
+            DeviceEventEmitter.emit("guestAccountsUpdated", { type: selectedType, updatedAccounts: accountsArr });
+
+          } else {
+            // Firebase: remove from correct type collection
+            const isShared = trackerId !== "personal";
+            const refPath = isShared
+              ? ["sharedTrackers", trackerId, selectedType, accId] // shared
+              : ["users", userId, "trackers", trackerId, selectedType, accId]; // personal
+
+            const ref = doc(db, ...refPath);
+            await deleteDoc(ref);
+
+            // Optionally: remove from offline queue
+            const queueKey = `offlineQueue_${trackerId}_${selectedType}`;
+            const queueJson = await AsyncStorage.getItem(queueKey);
+            let queue = queueJson ? JSON.parse(queueJson) : [];
+            queue = queue.filter(item => item.payload.id !== accId);
+            await AsyncStorage.setItem(queueKey, JSON.stringify(queue));
           }
-        },
+          navigation.goBack();
+        } catch (err) {
+          console.error("Failed to delete account:", err);
+          Alert.alert("Error", "Could not delete account.");
+        }
       },
-    ]);
-  };
+    },
+  ]);
+};
+
+
+
+
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.headerBackground}>
         <View style={styles.headerContent}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#A4C0CF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Set up {selectedType}</Text>
+          <Text style={styles.headerTitle}>{isEditing ? "Edit" : "Set up"} {selectedType}</Text>
           <View style={{ width: 24 }} />
         </View>
       </View>
@@ -162,11 +200,7 @@ export default function SetupAccountScreen({ navigation, route }) {
         <Text style={styles.groupLabel}>Group</Text>
         <View style={styles.tabContainer}>
           {types.map(t => (
-            <TouchableOpacity
-              key={t}
-              style={[styles.tab, selectedType === t && styles.selectedTab]}
-              onPress={() => setSelectedType(t)}
-            >
+            <TouchableOpacity key={t} style={[styles.tab, selectedType === t && styles.selectedTab]} onPress={() => setSelectedType(t)}>
               <Text style={[styles.tabText, selectedType === t && styles.selectedTabText]}>{t}</Text>
             </TouchableOpacity>
           ))}
@@ -178,22 +212,16 @@ export default function SetupAccountScreen({ navigation, route }) {
         <Text style={styles.label}>Amount</Text>
         <View style={styles.amountInputWrapper}>
           <Text style={styles.currencyIcon}>{currencySymbol}</Text>
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            placeholder="Enter amount"
-            keyboardType="numeric"
-            style={styles.amountInput}
-          />
+          <TextInput value={amount} onChangeText={setAmount} placeholder="Enter amount" keyboardType="numeric" style={styles.amountInput} />
         </View>
 
-        <View style={styles.buttonsRow}>
-          {account?.id && (
-            <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
+        <View style={[styles.buttonsRow, { justifyContent: "flex-start", alignItems: "center" }]}>
+          {isEditing && (
+            <TouchableOpacity style={{ backgroundColor: "#A4C0CF", width: 40, height: 40, borderRadius: 4, justifyContent: "center", alignItems: "center", marginRight: 12 }} onPress={handleDelete}>
               <Ionicons name="trash-outline" size={20} color="#145C84" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+          <TouchableOpacity style={[styles.saveButton, { flex: 1 }]} onPress={handleUpdate}>
             <Text style={styles.saveText}>Save</Text>
           </TouchableOpacity>
         </View>
@@ -203,25 +231,72 @@ export default function SetupAccountScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  headerBackground: { height: 100, width: '100%', backgroundColor: '#145C84', justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 12 },
-  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { fontSize: 16, fontWeight: 'bold', color: '#A4C0CF' },
-  trackertype: { fontWeight: 'bold', color: '#6FB5DB', fontSize: 14, textAlign: 'center', padding: 10, backgroundColor: '#EDEDEE', marginBottom: 15 },
+  container: { flex: 1, backgroundColor: "#fff" },
+  headerBackground: {
+    height: 100,
+    width: "100%",
+    backgroundColor: "#145C84",
+    justifyContent: "flex-end",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  headerContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerTitle: { fontSize: 16, fontWeight: "bold", color: "#A4C0CF" },
+  trackertype: {
+    fontWeight: "bold",
+    color: "#6FB5DB",
+    fontSize: 14,
+    textAlign: "center",
+    padding: 10,
+    backgroundColor: "#EDEDEE",
+    marginBottom: 15,
+  },
   content: { paddingHorizontal: 16 },
-  groupLabel: { fontSize: 14, fontWeight: 'bold', color: '#386681', marginBottom: 8 },
-  tabContainer: { flexDirection: 'row', marginBottom: 20 },
-  tab: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4, backgroundColor: '#eee', marginRight: 10 },
-  selectedTab: { backgroundColor: '#89C3E6' },
-  tabText: { fontSize: 14, color: '#333' },
-  selectedTabText: { color: '#EBF8FF', fontWeight: 'bold' },
-  label: { fontSize: 14, color: '#386681', marginBottom: 6, fontWeight: 'bold' },
-  bottomInput: { borderBottomWidth: 1, borderBottomColor: '#ccc', paddingVertical: 8, marginBottom: 20 },
-  amountInputWrapper: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#ccc', marginBottom: 20 },
-  currencyIcon: { fontSize: 16, marginRight: 6, color: '#333' },
+  groupLabel: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#386681",
+    marginBottom: 8,
+  },
+  tabContainer: { flexDirection: "row", marginBottom: 20 },
+  tab: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 4,
+    backgroundColor: "#eee",
+    marginRight: 10,
+  },
+  selectedTab: { backgroundColor: "#89C3E6" },
+  tabText: { fontSize: 14, color: "#333" },
+  selectedTabText: { color: "#EBF8FF", fontWeight: "bold" },
+  label: { fontSize: 14, color: "#386681", marginBottom: 6, fontWeight: "bold" },
+  bottomInput: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#ccc",
+    paddingVertical: 8,
+    marginBottom: 20,
+  },
+  amountInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#ccc",
+    marginBottom: 20,
+  },
+  currencyIcon: { fontSize: 16, marginRight: 6, color: "#333" },
   amountInput: { flex: 1, paddingVertical: 8 },
-  buttonsRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
-  deleteButton: { backgroundColor: '#A4C0CF', padding: 10, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginRight: 12, width: 48, height: 48, flexShrink: 0 },
-  saveButton: { flex: 1, backgroundColor: '#145C84', paddingVertical: 14, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  saveText: { color: '#F7F2B3', fontWeight: '600', fontSize: 16 },
+  buttonsRow: { flexDirection: "row", alignItems: "center", width: "100%" },
+  saveButton: {
+    flex: 1,
+    backgroundColor: "#145C84",
+    paddingVertical: 14,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  saveText: { color: "#F7F2B3", fontWeight: "600", fontSize: 16 },
 });

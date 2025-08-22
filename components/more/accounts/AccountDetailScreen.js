@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useContext, useRef } from 'react';
+import React, { useEffect, useState, useContext } from "react";
 import {
   View,
   Text,
@@ -6,157 +6,110 @@ import {
   SafeAreaView,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
   DeviceEventEmitter,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { TrackerContext } from '../../context/TrackerContext';
-import { loadAccounts } from '../accounts/utils/trackerStorage';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { db } from '../../../config/firebase-config';
-import { doc, onSnapshot } from 'firebase/firestore';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { TrackerContext } from "../../context/TrackerContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { db } from "../../../config/firebase-config";
+import { collection, onSnapshot } from "firebase/firestore";
 
 export default function AccountDetailScreen({ navigation }) {
-  const accountTypes = ['Cash', 'Banks', 'E-Wallets'];
-  const { trackerId, trackerName, isOnline, syncPendingAccounts, updateTracker } =
-    useContext(TrackerContext);
-  const isShared = trackerId !== 'personal';
+  const accountTypes = ["Cash", "Banks", "E-Wallets"];
+  const { trackerId, trackerName, userId, mode, isGuest } = useContext(TrackerContext);
 
-  const [userId, setUserId] = useState(null);
-  const [userEmail, setUserEmail] = useState(null);
   const [accounts, setAccounts] = useState({});
-  const [currentTrackerName, setCurrentTrackerName] = useState(trackerName);
   const [loading, setLoading] = useState(true);
-  const sharedUnsubRef = useRef(null);
+  const [currentTrackerName, setCurrentTrackerName] = useState(trackerName);
 
-  /** ---------- Load userId & email ---------- */
+  const OFFLINE_QUEUE_PREFIX = `offlineQueue_${trackerId}_`;
+  
+  /** ---------- DeviceEventEmitter for guest updates ---------- */
   useEffect(() => {
-    const loadUserData = async () => {
-      try {
-        const savedUserId = await AsyncStorage.getItem('userId');
-        const savedEmail = await AsyncStorage.getItem('userEmail');
-        setUserId(savedUserId);
-        setUserEmail(savedEmail);
-      } catch (err) {
-        console.error('Failed to load user data:', err);
+    const subscription = DeviceEventEmitter.addListener(
+      "guestAccountsUpdated",
+      ({ type, updatedAccounts }) => {
+        setAccounts(prev => ({ ...prev, [type]: updatedAccounts }));
       }
-    };
-    loadUserData();
+    );
+    return () => subscription.remove();
   }, []);
 
-  /** ---------- Merge helper ---------- */
-  const mergeAccounts = (lists) => {
-    const map = new Map();
-    lists.flat().forEach((acc) => map.set(acc.id, acc));
-    return Array.from(map.values());
-  };
-
-  /** ---------- Unified refresh & pending sync ---------- */
-  const refreshAccounts = async () => {
-    if (!trackerId || !userId) return;
-    setLoading(true);
-
-    try {
-      const updatedAccounts = {};
-
-      for (const type of accountTypes) {
-        let tasks = [];
-
-        if (trackerId === 'personal') {
-          // Load personal accounts
-          tasks.push(loadAccounts({ userId, trackerId, type, isShared: false }));
-          // Pending personal edits
-          tasks.push(
-            AsyncStorage.getItem(`pendingAccounts_${type}_${trackerId}`).then((raw) =>
-              raw ? JSON.parse(raw) : []
-            )
-          );
-        } else {
-          // Shared tracker: load cached shared accounts only
-          tasks.push(
-            AsyncStorage.getItem(`sharedTracker_${trackerId}`).then((raw) => {
-              const cached = raw ? JSON.parse(raw) : {};
-              return cached[type] || [];
-            })
-          );
-        }
-
-        const results = await Promise.all(tasks);
-        updatedAccounts[type] = mergeAccounts(results);
-
-        // Remove pending if online (only for personal)
-        if (trackerId === 'personal' && isOnline) {
-          await AsyncStorage.removeItem(`pendingAccounts_${type}_${trackerId}`);
-        }
-      }
-
-      setAccounts(updatedAccounts);
-
-      // Save shared tracker locally and sync pending shared updates
-      if (isShared && isOnline) {
-        await AsyncStorage.setItem(
-          `sharedTracker_${trackerId}`,
-          JSON.stringify(updatedAccounts)
-        );
-
-        if (typeof syncPendingAccounts === 'function') await syncPendingAccounts();
-      }
-    } catch (err) {
-      console.error('Failed to refresh accounts:', err);
-      setAccounts({});
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /** ---------- Real-time listener for shared tracker ---------- */
+  /** ---------- Load accounts (guest or Firestore) ---------- */
   useEffect(() => {
-    if (!isShared || !trackerId || !isOnline || !userEmail || !userId) return;
+    if (!trackerId) return;
 
-    const trackerRef = doc(db, 'sharedTrackers', trackerId);
-    if (sharedUnsubRef.current) sharedUnsubRef.current();
-
-    sharedUnsubRef.current = onSnapshot(trackerRef, (snapshot) => {
-      if (!snapshot.exists()) return;
-
-      const data = snapshot.data();
-      const allowed = data.people?.includes(userEmail) || data.ownerId === userId;
-      if (!allowed) {
-        setAccounts({});
-        return;
+    const fetchGuestAccounts = async () => {
+      setLoading(true);
+      try {
+        const guestData = {};
+        for (const type of accountTypes) {
+          const key = `guest_${trackerId}_${type}`;
+          const json = await AsyncStorage.getItem(key);
+          guestData[type] = json ? JSON.parse(json) : [];
+        }
+        setAccounts(guestData);
+        setCurrentTrackerName(trackerName || "Guest Tracker");
+      } catch (err) {
+        console.error("Failed to load guest accounts:", err);
+      } finally {
+        setLoading(false);
       }
+    };
 
-      // Update tracker name dynamically
-      if (data.name && data.name !== currentTrackerName) {
-        setCurrentTrackerName(data.name);
-        updateTracker(trackerId, data.name);
-      }
+    if (isGuest || mode === "guest" || !userId) {
+      fetchGuestAccounts();
+      return;
+    }
 
-      // Shared accounts only
-      const updatedAccounts = {};
-      accountTypes.forEach((type) => {
-        updatedAccounts[type] = data[type] || [];
-      });
+    // Firestore listeners
+    const pathBase = mode === "personal"
+      ? ["users", userId, "trackers", trackerId]
+      : ["sharedTrackers", trackerId];
 
-      setAccounts(updatedAccounts);
-      AsyncStorage.setItem(`sharedTracker_${trackerId}`, JSON.stringify(updatedAccounts));
+    setLoading(true);
+    const unsubs = accountTypes.map(type => {
+      const ref = collection(db, ...pathBase, type);
+      return onSnapshot(
+        ref,
+        async snapshot => {
+          let liveAccounts = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // Merge offline queued changes
+          const queueKey = `${OFFLINE_QUEUE_PREFIX}${type}`;
+          const queueJson = await AsyncStorage.getItem(queueKey);
+          const queue = queueJson ? JSON.parse(queueJson) : [];
+
+          queue.forEach(item => {
+            if (item.action === "add") liveAccounts.push(item.payload);
+            if (item.action === "update") {
+              const idx = liveAccounts.findIndex(a => a.id === item.payload.id);
+              if (idx !== -1) liveAccounts[idx] = { ...liveAccounts[idx], ...item.payload };
+            }
+            if (item.action === "delete") {
+              liveAccounts = liveAccounts.filter(a => a.id !== item.payload.id);
+            }
+          });
+
+          setAccounts(prev => ({ ...prev, [type]: liveAccounts }));
+          setLoading(false);
+        },
+        err => {
+          console.error(`Account listener error (${type}):`, err);
+          setLoading(false);
+        }
+      );
     });
 
-    return () => sharedUnsubRef.current && sharedUnsubRef.current();
-  }, [trackerId, userId, userEmail, isOnline, isShared, currentTrackerName]);
+    setCurrentTrackerName(trackerName);
+    return () => unsubs.forEach(u => u());
+  }, [trackerId, userId, mode, trackerName, isGuest]);
 
-  /** ---------- Offline updates listener ---------- */
-  useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener('accountsUpdated', refreshAccounts);
-    return () => subscription.remove();
-  }, [userId, trackerId]);
-
-  /** ---------- Initial load ---------- */
-  useEffect(() => {
-    refreshAccounts();
-  }, [trackerId, userId, userEmail, isOnline]);
-
-  /** ---------- Navigation ---------- */
-  const handleEditAccount = (type) => navigation.navigate('EditAccountScreen', { type });
+  /** ---------- Navigate to EditAccountScreen ---------- */
+  const handleEditAccount = type => {
+    navigation.navigate("EditAccountScreen", { type });
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -170,72 +123,137 @@ export default function AccountDetailScreen({ navigation }) {
         </View>
       </View>
 
-      {currentTrackerName && <Text style={styles.trackertype}>{currentTrackerName}</Text>}
+      {currentTrackerName && (
+        <Text style={styles.trackertype}>{currentTrackerName}</Text>
+      )}
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {accountTypes.map((type) => (
-          <View key={type} style={styles.typeSection}>
-            <View style={styles.typeRow}>
-              <Text style={styles.typeText}>{type}</Text>
-              <TouchableOpacity onPress={() => handleEditAccount(type)}>
-                <Ionicons name="create-outline" size={20} color="#145C84" />
-              </TouchableOpacity>
-            </View>
+<ScrollView contentContainerStyle={styles.content}>
+  {accountTypes.map(type => {
+    const accountList = Array.isArray(accounts[type]) ? accounts[type] : [];
 
-            {loading ? (
-              <>
-                <View style={styles.skeletonItem} />
-                <View style={styles.skeletonItem} />
-              </>
-            ) : (accounts[type] || []).length === 0 ? (
-              <Text style={styles.fallbackText}>No accounts yet.</Text>
-            ) : (
-              accounts[type].map((acc) => (
-                <View key={acc.id} style={styles.accountItem}>
-                  <Text style={styles.accountText}>{acc.name}</Text>
-                </View>
-              ))
-            )}
-          </View>
-        ))}
-      </ScrollView>
+    return (
+      <View key={type} style={styles.typeSection}>
+        <View style={styles.typeRowFull}>
+          <Text style={styles.typeTextFull}>{type}</Text>
+          <TouchableOpacity onPress={() => handleEditAccount(type)}>
+            <Ionicons name="create-outline" size={20} color="#145C84" marginRight="20" />
+          </TouchableOpacity>
+        </View>
+
+
+
+        {loading ? (
+          <ActivityIndicator size="small" color="#145C84" style={{ marginTop: 10 }} />
+        ) : accountList.length === 0 ? (
+          <Text style={styles.fallbackText}>No accounts yet.</Text>
+        ) : (
+          accountList.map(acc => (
+            <TouchableOpacity
+              key={acc.id || acc.name}
+              style={styles.accountItem}
+              onPress={() =>
+                navigation.navigate("SetupAccountScreen", {
+                  account: acc,
+                  type,
+                  accountId: acc.id,
+                  isGuest,
+                  onUpdate: ({ oldType, newType, updatedAccount }) => {
+                    setAccounts(prev => {
+                      const newState = { ...prev };
+
+                      // Remove from old type if necessary
+                      if (oldType && oldType !== newType) {
+                        newState[oldType] = (newState[oldType] || []).filter(a => a.id !== updatedAccount.id);
+                      }
+
+                      // Merge/update into the new type
+                      const typeArr = newState[newType] || [];
+                      const idx = typeArr.findIndex(a => a.id === updatedAccount.id);
+
+                      if (idx !== -1) {
+                        // Update existing account
+                        typeArr[idx] = { ...typeArr[idx], ...updatedAccount };
+                      } else {
+                        // Add new account
+                        typeArr.push(updatedAccount);
+                      }
+
+                      newState[newType] = typeArr;
+
+                      return newState;
+                    });
+                  }
+
+                })
+              }
+            >
+              <Text style={styles.accountText}>{acc.name}</Text>
+            </TouchableOpacity>
+          ))
+        )}
+      </View>
+    );
+  })}
+</ScrollView>
+
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: "#fff" },
   headerBackground: {
     height: 100,
-    backgroundColor: '#145C84',
-    justifyContent: 'flex-end',
+    backgroundColor: "#145C84",
+    justifyContent: "flex-end",
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
-  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { fontSize: 16, fontWeight: 'bold', color: '#A4C0CF' },
+  headerContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerTitle: { fontSize: 16, fontWeight: "bold", color: "#A4C0CF" },
   trackertype: {
-    fontWeight: 'bold',
-    color: '#6FB5DB',
+    fontWeight: "bold",
+    color: "#6FB5DB",
     fontSize: 14,
-    textAlign: 'center',
+    textAlign: "center",
     padding: 10,
-    backgroundColor: '#EDEDEE',
+    backgroundColor: "#EDEDEE",
     marginBottom: 15,
   },
-  content: { paddingHorizontal: 16, paddingBottom: 32 },
-  typeSection: { marginBottom: 16, width: '100%' },
+  content: { paddingBottom: 32 },
+  typeSection: { marginBottom: 16, width: "100%" },
   typeRow: {
-    backgroundColor: '#f2f2f2',
+    backgroundColor: "#f2f2f2",
     borderRadius: 8,
     padding: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
-  typeText: { fontSize: 14, color: '#19445C', fontWeight: 'bold' },
-  fallbackText: { fontSize: 13, color: '#999', marginTop: 8, marginLeft: 16 },
+  typeText: { fontSize: 14, color: "#19445C", fontWeight: "bold" },
+  fallbackText: { fontSize: 13, color: "#999", marginTop: 8, marginLeft: 36 },
   accountItem: { marginTop: 8, marginLeft: 16, paddingVertical: 6, borderRadius: 6 },
-  accountText: { fontSize: 14, color: '#386681' },
-  skeletonItem: { height: 20, backgroundColor: '#E0E0E0', marginHorizontal: 16, marginVertical: 6, borderRadius: 4 },
+  accountText: { fontSize: 14, color: "#386681" , marginLeft: 20 },
+typeRowFull: {
+  backgroundColor: "#f2f2f2",
+  borderRadius: 8,
+  paddingVertical: 12,
+  paddingHorizontal: 5,   // remove horizontal padding
+  flexDirection: "row",
+  alignItems: "center",
+  width: "100%",           // full width
+},
+
+typeTextFull: {
+  flex: 1,                 // stretch to fill row
+  fontSize: 14,
+  fontWeight: "bold",
+  color: "#19445C",
+  paddingHorizontal: 16,   // optional: same padding as subheader
+},
+
 });

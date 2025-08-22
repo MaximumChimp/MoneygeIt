@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  DeviceEventEmitter 
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { Ionicons } from '@expo/vector-icons';
@@ -95,26 +96,28 @@ export default function CurrencyScreen({ navigation }) {
 
   const displayedCurrencies = filteredCurrencies.slice(0, 10);
 
-  const handleSelectCurrency = async (item) => {
-    Alert.alert(
-      "Confirm Currency",
-      `Use ${item.name} (${item.symbol}) as your currency?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Yes",
-          onPress: async () => {
-            try {
-              await AsyncStorage.setItem('selectedCurrency', JSON.stringify(item));
-              navigation.goBack();
-            } catch (error) {
-              console.error("Error saving currency:", error);
-            }
-          },
-        },
-      ]
-    );
+const handleSelectCurrency = (item) => {
+  const saveCurrency = async () => {
+    try {
+      await AsyncStorage.setItem('selectedCurrency', JSON.stringify(item));
+      navigation.goBack();
+      // Emit event so other screens can update immediately
+      DeviceEventEmitter.emit("currencyChanged", item);
+    } catch (error) {
+      console.error("Error saving currency:", error);
+    }
   };
+
+  Alert.alert(
+    "Confirm Currency",
+    `Use ${item.name} (${item.symbol}) as your currency?`,
+    [
+      { text: "Cancel", style: "cancel" },
+      { text: "Yes", onPress: saveCurrency },
+    ]
+  );
+};
+
 
   return (
     <SafeAreaView style={styles.container}>

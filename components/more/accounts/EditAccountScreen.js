@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useContext, useRef } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -14,150 +14,137 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackerContext } from '../../context/TrackerContext';
-import { loadAccounts, saveAccounts } from '../../more/accounts/utils/trackerStorage';
 import { db } from '../../../config/firebase-config';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
-
+import { collection, doc, setDoc, getDocs,deleteDoc } from 'firebase/firestore';
+import { DeviceEventEmitter } from 'react-native';
 export default function EditAccountScreen({ navigation, route }) {
   const { type } = route.params;
-  const { trackerId, trackerName } = useContext(TrackerContext);
-  const isShared = trackerId !== 'personal';
+  const { trackerId, trackerName, userId } = useContext(TrackerContext);
 
-  const [userId, setUserId] = useState(null);
-  const [userEmail, setUserEmail] = useState(null);
   const [accounts, setAccounts] = useState([]);
-  const debounceRefs = useRef({});
-
-  /** ---------- Load userId & email ---------- */
-  useEffect(() => {
-    const loadUserData = async () => {
-      try {
-        const savedId = await AsyncStorage.getItem('userId');
-        const savedEmail = await AsyncStorage.getItem('userEmail'); // ensure email saved locally
-        setUserId(savedId);
-        setUserEmail(savedEmail);
-      } catch (err) {
-        console.error('Failed to load user data:', err);
-      }
-    };
-    loadUserData();
-  }, []);
+  const isShared = trackerId !== 'personal';
+  const isGuest = !userId && !isShared;
 
   /** ---------- Load accounts ---------- */
   useEffect(() => {
-    let unsubscribeShared = null;
+    const loadAccounts = async () => {
+      if (isGuest) {
+        // Guest account from AsyncStorage
+        const key = `guest_${trackerId}_${type}`;
+        const raw = await AsyncStorage.getItem(key);
+        setAccounts(raw ? JSON.parse(raw) : []);
+      } else if (userId || isShared) {
+        // Fetch from Firestore
+        const path = isShared
+          ? collection(db, 'sharedTrackers', trackerId, type)
+          : collection(db, 'users', userId, 'trackers', trackerId, type);
 
-    const fetchAccounts = async () => {
-      if (isShared) {
-        const trackerRef = doc(db, 'sharedTrackers', trackerId);
-        unsubscribeShared = onSnapshot(trackerRef, snapshot => {
-          if (!snapshot.exists()) return;
-
-          const data = snapshot.data();
-          // Only allow access if user is in people array or is owner
-          const allowed = data.people?.includes(userEmail) || data.ownerId === userId;
-          if (!allowed) return setAccounts([]);
-
-          const sharedAccounts = data[type] || [];
-          setAccounts(sharedAccounts);
-        });
-      } else if (userId) {
-        const data = await loadAccounts({ userId, trackerId, type, isShared });
-        setAccounts(data);
+        const snapshot = await getDocs(path);
+        const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setAccounts(fetched);
       }
     };
 
-    fetchAccounts();
+    loadAccounts();
+  }, [trackerId, type, userId, isShared, isGuest]);
 
-    return () => {
-      if (unsubscribeShared) unsubscribeShared();
-    };
-  }, [trackerId, type, isShared, userId, userEmail]);
-
-  /** ---------- Handlers ---------- */
-  const handleAddField = async () => {
-    const newAccount = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 8)}`,
-      name: '',
-      amount: 0,
-    };
-
-    if (isShared) {
-      try {
-        const trackerRef = doc(db, 'sharedTrackers', trackerId);
-        const trackerSnap = await getDoc(trackerRef);
-        const data = trackerSnap.data();
-        const updatedArray = [...(data[type] || []), newAccount];
-        await setDoc(trackerRef, { [type]: updatedArray }, { merge: true });
-      } catch (err) {
-        console.error('Failed to add shared account:', err);
-        return Alert.alert('Error', 'Failed to add shared account.');
-      }
-    }
-
-    setAccounts(prev => [...prev, newAccount]);
+  /** ---------- Add new account ---------- */
+  const handleAddField = () => {
+    setAccounts(prev => [
+      ...prev,
+      { id: `temp_${Date.now()}`, name: '', amount: 0 },
+    ]);
   };
 
-  const handleChange = (text, index) => {
+  /** ---------- Update account ---------- */
+  const handleChange = (field, value, index) => {
     setAccounts(prev => {
       const updated = [...prev];
-      updated[index].name = text;
+      updated[index][field] = value;
       return updated;
     });
-
-    if (isShared) {
-      const account = accounts[index];
-      if (debounceRefs.current[account.id]) clearTimeout(debounceRefs.current[account.id]);
-      debounceRefs.current[account.id] = setTimeout(async () => {
-        try {
-          const trackerRef = doc(db, 'sharedTrackers', trackerId);
-          const trackerSnap = await getDoc(trackerRef);
-          const data = trackerSnap.data();
-          const updatedArray = (data[type] || []).map(a =>
-            a.id === account.id ? { ...a, name: text } : a
-          );
-          await setDoc(trackerRef, { [type]: updatedArray }, { merge: true });
-        } catch (err) {
-          console.error('Failed to update shared account:', err);
-        }
-      }, 500);
-    }
   };
 
-  const handleDelete = async index => {
-    const account = accounts[index];
+  /** ---------- Delete account ---------- */
+const handleDelete = async (index) => {
+  const accountToDelete = accounts[index];
 
-    if (isShared) {
-      try {
-        const trackerRef = doc(db, 'sharedTrackers', trackerId);
-        const trackerSnap = await getDoc(trackerRef);
-        const data = trackerSnap.data();
-        const updatedArray = (data[type] || []).filter(a => a.id !== account.id);
-        await setDoc(trackerRef, { [type]: updatedArray }, { merge: true });
-      } catch (err) {
-        console.error('Failed to delete shared account:', err);
+  try {
+    if (isGuest) {
+      // Remove from AsyncStorage
+      const key = `guest_${trackerId}_${type}`;
+      const raw = await AsyncStorage.getItem(key);
+      let guestAccounts = raw ? JSON.parse(raw) : [];
+      guestAccounts = guestAccounts.filter(a => a.id !== accountToDelete.id);
+      await AsyncStorage.setItem(key, JSON.stringify(guestAccounts));
+
+      // Emit update for other screens
+      DeviceEventEmitter.emit('guestAccountsUpdated', {
+        type,
+        updatedAccounts: guestAccounts,
+      });
+
+      // Remove from local state
+      setAccounts(prev => prev.filter((_, i) => i !== index));
+
+    } else {
+      // Remove from Firestore
+      const collectionPath = isShared
+        ? ['sharedTrackers', trackerId, type]
+        : ['users', userId, 'trackers', trackerId, type];
+
+      const docRef = doc(db, ...collectionPath, accountToDelete.id);
+      await deleteDoc(docRef);
+
+      // Remove from local state
+      setAccounts(prev => prev.filter((_, i) => i !== index));
+    }
+
+  } catch (err) {
+    console.error('Failed to delete account:', err);
+    Alert.alert('Error', 'Could not delete account.');
+  }
+};
+
+  /** ---------- Save accounts ---------- */
+const handleSave = async () => {
+  const validAccounts = accounts.filter(a => a.name?.trim());
+
+  if (validAccounts.length === 0) {
+    return Alert.alert('Validation Error', 'Please add at least one account.');
+  }
+
+  try {
+    if (isGuest) {
+      const key = `guest_${trackerId}_${type}`;
+      await AsyncStorage.setItem(key, JSON.stringify(validAccounts));
+
+      // Emit event so other screens update automatically
+      DeviceEventEmitter.emit('guestAccountsUpdated', {
+        type,
+        updatedAccounts: validAccounts,
+      });
+    } else {
+      const collectionPath = isShared
+        ? ['sharedTrackers', trackerId, type]
+        : ['users', userId, 'trackers', trackerId, type];
+
+      for (const account of validAccounts) {
+        const accountRef = doc(db, ...collectionPath, account.id || `${Date.now()}`);
+        await setDoc(accountRef, {
+          name: account.name.trim(),
+          amount: account.amount ?? 0,
+        });
       }
     }
 
-    setAccounts(prev => prev.filter((_, i) => i !== index));
-  };
-
-  /** ---------- Save personal accounts ---------- */
-  const handleSave = async () => {
-    const filtered = accounts.filter(a => a.name?.trim());
-    if (filtered.length === 0)
-      return Alert.alert('Validation Error', 'Please add at least one account name.');
-
-    if (!isShared) {
-      if (!userId) return Alert.alert('Error', 'No user found. Please log in again.');
-      await saveAccounts({ userId, trackerId, type, accounts: filtered, isShared });
-    }
-
-    setAccounts(filtered);
     navigation.goBack();
-  };
+  } catch (err) {
+    console.error('Failed to save accounts:', err);
+    Alert.alert('Error', 'Failed to save accounts.');
+  }
+};
 
-  /** ---------- Render ---------- */
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerBackground}>
@@ -176,26 +163,35 @@ export default function EditAccountScreen({ navigation, route }) {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.content}>
-          {accounts.map((item, index) => (
-            <View key={item.id} style={styles.accountRow}>
-              <TextInput
-                style={styles.input}
-                value={item.name}
-                placeholder="Account name"
-                onChangeText={text => handleChange(text, index)}
-              />
-              <TouchableOpacity onPress={() => handleDelete(index)} style={styles.deleteIcon}>
-                <Ionicons name="trash-outline" size={20} color="#145C84" />
-              </TouchableOpacity>
-            </View>
-          ))}
+<ScrollView contentContainerStyle={styles.content}>
+  {accounts.length === 0 ? (
+    <View style={styles.fallbackContainer}>
+      <Text style={styles.fallbackText}>
+        No accounts created yet. Tap "Add Account" to get started.
+      </Text>
+    </View>
+  ) : (
+    accounts.map((item, idx) => (
+      <View key={item.id} style={styles.accountRow}>
+        <TextInput
+          style={styles.input}
+          value={item.name}
+          placeholder="Account name"
+          onChangeText={text => handleChange('name', text, idx)}
+        />
+        <TouchableOpacity onPress={() => handleDelete(idx)} style={styles.deleteIcon}>
+          <Ionicons name="trash-outline" size={20} color="#145C84" />
+        </TouchableOpacity>
+      </View>
+    ))
+  )}
 
-          <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
-            <Ionicons name="add-circle-outline" size={20} color="#145C84" />
-            <Text style={styles.addButtonText}>Add Account</Text>
-          </TouchableOpacity>
-        </ScrollView>
+  <TouchableOpacity onPress={handleAddField} style={styles.addButton}>
+    <Ionicons name="add-circle-outline" size={20} color="#145C84" />
+    <Text style={styles.addButtonText}>Add Account</Text>
+  </TouchableOpacity>
+</ScrollView>
+
 
         <View style={styles.fixedSaveContainer}>
           <TouchableOpacity
@@ -213,7 +209,6 @@ export default function EditAccountScreen({ navigation, route }) {
     </SafeAreaView>
   );
 }
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   headerBackground: {
@@ -235,12 +230,36 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   content: { padding: 16, paddingBottom: 32 },
-  accountRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1, borderColor: '#ccc' },
+  accountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderColor: '#ccc',
+  },
   input: { flex: 1, fontSize: 14.5, paddingVertical: 8, paddingHorizontal: 10 },
   deleteIcon: { marginLeft: 12, justifyContent: 'center', alignItems: 'center', padding: 6 },
   addButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   addButtonText: { marginLeft: 6, color: '#145C84', fontSize: 14 },
-  fixedSaveContainer: { padding: 16, backgroundColor: '#fff', borderTopWidth: 1, borderColor: '#ccc', alignItems: 'center' },
+  fixedSaveContainer: {
+    padding: 16,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderColor: '#ccc',
+    alignItems: 'center',
+  },
   saveButton: { backgroundColor: '#145C84', padding: 16, width: '100%', borderRadius: 8 },
   saveButtonText: { color: '#F7F2B3', textAlign: 'center', fontWeight: 'bold', fontSize: 16 },
+  fallbackContainer: {
+  padding: 20,
+  paddingTop:4,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+fallbackText: {
+  fontSize: 14,
+  color: '#999',
+  textAlign: 'center',
+},
+
 });

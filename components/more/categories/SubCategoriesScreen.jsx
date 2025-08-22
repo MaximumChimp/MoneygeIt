@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -10,179 +10,179 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  DeviceEventEmitter,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { TrackerContext } from '../../context/TrackerContext';
+import { db } from '../../../config/firebase-config';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 export default function SubcategoriesScreen({ navigation, route }) {
-  const { parentCategory, parentType } = route.params;
+  const { categoryId, categoryName, parentType, saveGuestCategories } = route.params;
+  const { trackerId, userId } = useContext(TrackerContext);
+  const isGuest = !userId;
+
   const [subcategories, setSubcategories] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
 
-  const storageKey = `subcategories_${parentCategory.id}`;
-
-  useEffect(() => {
-  const loadSubcategories = async () => {
+  /** ---------- Load Guest Subcategories ---------- */
+  const loadGuestSubcategories = async () => {
     try {
-      const allData = await AsyncStorage.getItem('all_categories');
-      const parsed = allData ? JSON.parse(allData) : {};
-
-      const categories = parsed[parentType] || [];
-      const parent = categories.find((cat) => cat.id === parentCategory.id);
-
+      const key = `guest_${trackerId || 'personal'}_${parentType}`;
+      const raw = await AsyncStorage.getItem(key);
+      const categories = raw ? JSON.parse(raw) : [];
+      const parent = categories.find(c => c.categoryId === categoryId);
       setSubcategories(parent?.subcategories || []);
-    } catch (error) {
-      console.error('Failed to load subcategories:', error);
+    } catch (err) {
+      console.error('Failed to load guest subcategories:', err);
     }
   };
 
-  loadSubcategories();
-}, []);
-
-
-  const handleAddField = () => {
-    setSubcategories([
-      ...subcategories,
-      {
-        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
-        name: '',
+  /** ---------- Load Firestore Subcategories ---------- */
+  const loadFirestoreSubcategories = () => {
+    if (!categoryId) return;
+    const docRef = doc(db, 'categories', categoryId);
+    return onSnapshot(
+      docRef,
+      snapshot => {
+        const data = snapshot.data();
+        setSubcategories(data?.subcategories || []);
       },
+      err => console.error('Firestore listener error:', err)
+    );
+  };
+
+  /** ---------- Initialize subcategories ---------- */
+  useEffect(() => {
+    if (isGuest) {
+      loadGuestSubcategories();
+      const listener = DeviceEventEmitter.addListener('guestCategoriesUpdated', ({ type, updatedCategories }) => {
+        if (type === parentType) {
+          const parent = updatedCategories.find(c => c.categoryId === categoryId);
+          if (parent?.subcategories) setSubcategories(parent.subcategories);
+        }
+      });
+      return () => listener.remove();
+    } else {
+      const unsubscribe = loadFirestoreSubcategories();
+      return () => unsubscribe && unsubscribe();
+    }
+  }, [categoryId, trackerId, userId]);
+
+  /** ---------- Add Subcategory ---------- */
+  const handleAddField = () => {
+    setSubcategories(prev => [
+      ...prev,
+      { id: Date.now().toString() + Math.random().toString(36).substring(2, 8), name: '' },
     ]);
     setHasChanges(true);
   };
 
+  /** ---------- Update Subcategory ---------- */
   const handleChange = (text, index) => {
-    const newSubs = [...subcategories];
-    newSubs[index] = {
-      ...newSubs[index],
-      name: text,
-    };
-    setSubcategories(newSubs);
+    setSubcategories(prev => {
+      const updated = [...prev];
+      updated[index].name = text;
+      return updated;
+    });
     setHasChanges(true);
   };
 
-const handleSave = async () => {
-  const cleaned = subcategories
-    .filter(item => item.name.trim() !== '')
-    .map(item => ({
-      id: item.id || Date.now().toString() + Math.random().toString(36).substring(2, 8),
-      name: item.name.trim(),
-    }));
+  /** ---------- Delete Subcategory ---------- */
+  const handleDelete = (index) => {
+    Alert.alert('Delete Subcategory', 'Are you sure you want to delete this subcategory?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const updatedSubs = subcategories.filter((_, idx) => idx !== index);
+          setSubcategories(updatedSubs);
+          setHasChanges(true);
 
-  try {
-    // 1. Load all categories
-    const allData = await AsyncStorage.getItem('all_categories');
-    const parsed = allData ? JSON.parse(allData) : {};
-
-    // 2. Update the correct category inside the correct type group
-    const updatedCategories = (parsed[parentType] || []).map(cat => {
-      if (cat.id === parentCategory.id) {
-        return {
-          ...cat,
-          subcategories: cleaned,
-        };
-      }
-      return cat;
-    });
-
-    // 3. Save it back
-    await AsyncStorage.setItem(
-      'all_categories',
-      JSON.stringify({
-        ...parsed,
-        [parentType]: updatedCategories,
-      })
-    );
-
-    setSubcategories(cleaned);
-    setHasChanges(false);
-    Alert.alert('Success', 'Subcategories saved!');
-    navigation.goBack();
-  } catch (error) {
-    console.error('Save failed', error);
-    Alert.alert('Error', 'Failed to save subcategories.');
-  }
-};
-
- const handleDelete = (indexToDelete) => {
-    Alert.alert(
-      'Delete Subcategory',
-      'Are you sure you want to delete this subcategory?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updatedSubs = subcategories.filter((_, idx) => idx !== indexToDelete);
-              setSubcategories(updatedSubs);
-              setHasChanges(true);
-
-              // Update AsyncStorage immediately
-              const allData = await AsyncStorage.getItem('all_categories');
-              const parsed = allData ? JSON.parse(allData) : {};
-
-              const updatedCategories = (parsed[parentType] || []).map(cat => {
-                if (cat.id === parentCategory.id) {
-                  return {
-                    ...cat,
-                    subcategories: updatedSubs,
-                  };
-                }
-                return cat;
-              });
-
-              await AsyncStorage.setItem('all_categories', JSON.stringify({
-                ...parsed,
-                [parentType]: updatedCategories,
-              }));
-            } catch (error) {
-              console.error('Failed to delete subcategory:', error);
-              Alert.alert('Error', 'Failed to delete the subcategory.');
+          try {
+            if (isGuest) {
+              const key = `guest_${trackerId || 'personal'}_${parentType}`;
+              const raw = await AsyncStorage.getItem(key);
+              const categories = raw ? JSON.parse(raw) : [];
+              const updatedCategories = categories.map(cat =>
+                cat.categoryId === categoryId ? { ...cat, subcategories: updatedSubs } : cat
+              );
+              await AsyncStorage.setItem(key, JSON.stringify(updatedCategories));
+              DeviceEventEmitter.emit('guestCategoriesUpdated', { type: parentType, updatedCategories });
+              if (saveGuestCategories) saveGuestCategories(parentType, updatedCategories);
+            } else {
+              const docRef = doc(db, 'categories', categoryId);
+              await setDoc(docRef, { subcategories: updatedSubs }, { merge: true });
             }
-          },
+          } catch (err) {
+            console.error('Failed to delete subcategory:', err);
+            Alert.alert('Error', 'Failed to delete subcategory.');
+          }
         },
-      ],
-      { cancelable: true }
-    );
+      },
+    ]);
   };
 
+  /** ---------- Save Subcategories ---------- */
+  const handleSave = async () => {
+    const cleaned = subcategories
+      .filter(item => item.name.trim())
+      .map(item => ({ id: item.id, name: item.name.trim() }));
+
+    try {
+      if (isGuest) {
+        const key = `guest_${trackerId || 'personal'}_${parentType}`;
+        const raw = await AsyncStorage.getItem(key);
+        const categories = raw ? JSON.parse(raw) : [];
+        const updatedCategories = categories.map(cat =>
+          cat.categoryId === categoryId ? { ...cat, subcategories: cleaned } : cat
+        );
+        await AsyncStorage.setItem(key, JSON.stringify(updatedCategories));
+        DeviceEventEmitter.emit('guestCategoriesUpdated', { type: parentType, updatedCategories });
+        if (saveGuestCategories) saveGuestCategories(parentType, updatedCategories);
+      } else {
+        const docRef = doc(db, 'categories', categoryId);
+        await setDoc(docRef, { subcategories: cleaned }, { merge: true });
+      }
+
+      setSubcategories(cleaned);
+      setHasChanges(false);
+      Alert.alert('Success', 'Subcategories saved!');
+      navigation.goBack();
+    } catch (err) {
+      console.error('Save failed:', err);
+      Alert.alert('Error', 'Failed to save subcategories.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.headerBackground}>
         <View style={styles.headerContent}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#A4C0CF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{parentCategory.name} Subcategories</Text>
+          <Text style={styles.headerTitle}>{categoryName} Subcategories</Text>
           <View style={{ width: 24 }} />
         </View>
       </View>
 
-      <Text style={styles.trackertype}>Personal Budget Tracker</Text>
+      <Text style={styles.trackertype}>{isGuest ? 'Guest Tracker' : 'Budget Tracker'}</Text>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content}>
           {subcategories.length > 0 ? (
             subcategories.map((item, index) => (
-              <View key={item.id || index} style={styles.subcategoryRow}>
+              <View key={item.id} style={styles.subcategoryRow}>
                 <TextInput
                   style={styles.input}
                   value={item.name}
                   placeholder="Enter subcategory name"
-                  onChangeText={(text) => handleChange(text, index)}
+                  onChangeText={text => handleChange(text, index)}
                 />
-                <TouchableOpacity
-                  onPress={() => handleDelete(index)}
-                  style={styles.deleteIcon}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
+                <TouchableOpacity onPress={() => handleDelete(index)} style={styles.deleteIcon} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                   <Ionicons name="trash-outline" size={20} color="#145C84" />
                 </TouchableOpacity>
               </View>
@@ -207,105 +207,19 @@ const handleSave = async () => {
   );
 }
 
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-
-  headerBackground: {
-    height: 100,
-    width: '100%',
-    backgroundColor: '#145C84',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#A4C0CF',
-  },
-
-  trackertype: {
-    fontWeight: 'bold',
-    color: '#6FB5DB',
-    fontSize: 14,
-    textAlign: 'center',
-    padding: 10,
-    backgroundColor: '#EDEDEE',
-    marginBottom: 15,
-  },
-
-  fallback: {
-    textAlign: 'center',
-    color: '#888',
-    fontStyle: 'italic',
-    marginVertical: 10,
-  },
-
-  input: {
-    borderBottomWidth: 1,
-    borderColor: '#ccc',
-    paddingVertical: 8,
-    marginBottom: 12,
-    fontSize: 14.5,
-  },
-
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-
-  addButtonText: {
-    marginLeft: 6,
-    color: '#145C84',
-    fontSize: 14,
-  },
-
-  saveButton: {
-    backgroundColor: '#145C84',
-    padding: 16,
-    borderRadius: 0,
-  },
-
-  saveButtonText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-
-  content: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  subcategoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderColor: '#ccc',
-    marginBottom: 12,
-    paddingVertical: 6,
-  },
-
-  input: {
-    flex: 1,
-    fontSize: 14.5,
-    paddingVertical: 6,
-    paddingHorizontal: 0,
-    borderBottomWidth: 0,
-  },
-
-  deleteIcon: {
-    marginLeft: 8,
-    paddingVertical: 6,
-  },
-
+  headerBackground: { height: 100, width: '100%', backgroundColor: '#145C84', justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 12 },
+  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle: { fontSize: 16, fontWeight: 'bold', color: '#A4C0CF' },
+  trackertype: { fontWeight: 'bold', color: '#6FB5DB', fontSize: 14, textAlign: 'center', padding: 10, backgroundColor: '#EDEDEE', marginBottom: 15 },
+  fallback: { textAlign: 'center', color: '#888', fontStyle: 'italic', marginVertical: 10 },
+  input: { flex: 1, fontSize: 14.5, paddingVertical: 6, paddingHorizontal: 0, borderBottomWidth: 0 },
+  subcategoryRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: '#ccc', marginBottom: 12, paddingVertical: 6 },
+  deleteIcon: { marginLeft: 8, paddingVertical: 6 },
+  addButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  addButtonText: { marginLeft: 6, color: '#145C84', fontSize: 14 },
+  saveButton: { backgroundColor: '#145C84', padding: 16, borderRadius: 0 },
+  saveButtonText: { color: '#fff', textAlign: 'center', fontWeight: 'bold', fontSize: 16 },
+  content: { padding: 16, paddingBottom: 32 },
 });

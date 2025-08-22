@@ -1,143 +1,150 @@
-import React, { useState, useEffect, useRef,useCallback  } from 'react';
+import React, { useEffect, useState, useContext } from "react";
 import {
   View,
   Text,
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  RefreshControl,
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation,useFocusEffect  } from '@react-navigation/native';
+  ActivityIndicator,
+  DeviceEventEmitter,
+} from "react-native";
+import { TrackerContext } from "../context/TrackerContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { db } from "../../config/firebase-config";
+import { collection, onSnapshot } from "firebase/firestore";
 
-export default function AccountsScreen() {
-  const [grouped, setGrouped] = useState({
-    Cash: [],
-    Banks: [],
-    'E-Wallets': [],
-  });
+export default function AccountsScreen({ navigation }) {
+  const accountTypes = ["Cash", "Banks", "E-Wallets"];
+  const { trackerId, trackerName, userId, mode, isGuest } = useContext(TrackerContext);
+
+  const [accounts, setAccounts] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [currencySymbol, setCurrencySymbol] = useState("₱");
+  const [currentTrackerName, setCurrentTrackerName] = useState(trackerName);
   const [totalAssets, setTotalAssets] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  const [currencySymbol, setCurrencySymbol] = useState('₱');
-  const [expandedTypes, setExpandedTypes] = useState({
-    Cash: false,
-    Banks: false,
-    'E-Wallets': false,
-  });
+  const OFFLINE_QUEUE_PREFIX = `offlineQueue_${trackerId}_`;
 
-  const navigation = useNavigation();
-  const pollingRef = useRef(null);
-
-
-useFocusEffect(
-  useCallback(() => {
-    const fetchCurrencySymbol = async () => {
-      try {
-        const savedCurrency = await AsyncStorage.getItem('selectedCurrency');
-        if (savedCurrency) {
-          const parsed = JSON.parse(savedCurrency);
-          setCurrencySymbol(parsed.symbol);
-        }
-      } catch (err) {
-        console.error('Failed to fetch currency symbol:', err);
-      }
-    };
-
-    fetchCurrencySymbol();
-  }, [])
-);
-
-
-  const fetchGroupedAccounts = async () => {
-    try {
-      const stored = await AsyncStorage.getItem('all_accounts');
-      const parsed = stored ? JSON.parse(stored) : {};
-
-      const types = ['Cash', 'Banks', 'E-Wallets'];
-      const groupedByType = { Cash: [], Banks: [], 'E-Wallets': [] };
-
-      for (const type of types) {
-        const accounts = (parsed[type] || []).filter(acc => acc && acc.id);
-
-        const accountsWithBalance = await Promise.all(
-          accounts.map(async acc => {
-            const balanceStr = await AsyncStorage.getItem(`account_amount_${acc.id}`);
-            const balance = parseFloat(balanceStr) || 0;
-            return { ...acc, balance };
-          })
-        );
-
-        groupedByType[type] = accountsWithBalance;
-      }
-
-      setGrouped(groupedByType);
-
-      const allAccounts = Object.values(groupedByType).flat();
-      const total = allAccounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
-      setTotalAssets(total);
-    } catch (err) {
-      console.error('Failed to fetch grouped accounts:', err);
-    }
-  };
-
-  // Initial load
+  // ---------- Load saved currency ----------
   useEffect(() => {
-    fetchGroupedAccounts();
-
-    // Poll every 1 second for changes
-    pollingRef.current = setInterval(fetchGroupedAccounts, 1000);
-
-    return () => clearInterval(pollingRef.current);
+    AsyncStorage.getItem("selectedCurrency")
+      .then(res => res && setCurrencySymbol(JSON.parse(res).symbol || "₱"))
+      .catch(console.error);
   }, []);
 
-  const renderTypeSection = (type, items) => {
-    const expanded = expandedTypes[type];
-    const visibleItems = expanded ? items : items.slice(0, 3);
-    const typeTotal = items.reduce((sum, acc) => sum + parseFloat(acc.balance || 0), 0);
+  // ---------- Currency change listener ----------
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener("currencyChanged", (newCurrency) => {
+      setCurrencySymbol(newCurrency.symbol);
+    });
+    return () => subscription.remove();
+  }, []);
 
-    return (
-      <View style={styles.typeSection}>
-        <View style={styles.typeHeaderRow}>
-          <View style={styles.typeHeader}>
-            <Text style={styles.typeTitle}>{type}</Text>
-            <Text style={styles.typeTotal}>{currencySymbol} {typeTotal.toFixed(2)}</Text>
-          </View>
-        </View>
+  // ---------- Guest updates listener ----------
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener("guestAccountsUpdated", ({ type, updatedAccounts }) => {
+      setAccounts(prev => {
+        const updated = { ...prev, [type]: updatedAccounts };
+        recalcTotal(updated);
+        return updated;
+      });
+    });
+    return () => subscription.remove();
+  }, []);
 
-        {visibleItems.length > 0 ? (
-          visibleItems.map((item, idx) => (
-            <View key={idx} style={styles.card}>
-              <Text style={styles.name}>{item.name}</Text>
-              <Text
-                style={[
-                  styles.balance,
-                  parseFloat(item.balance) < 0 && { color: '#E98898' },
-                ]}
-              >
-                {currencySymbol} {parseFloat(item.balance).toFixed(2)}
-              </Text>
-            </View>
-          ))
-        ) : (
-          <Text style={styles.fallbackText}>No {type} accounts added yet.</Text>
-        )}
+  useEffect(() => {
+    if (!trackerId) return;
 
-        {items.length > 3 && (
-          <Text
-            onPress={() =>
-              setExpandedTypes(prev => ({
-                ...prev,
-                [type]: !prev[type],
-              }))
-            }
-            style={styles.toggleText}
-          >
-            {expanded ? 'Show less ▲' : 'Show more ▼'}
-          </Text>
-        )}
-      </View>
-    );
+    // ---------- Guest Mode ----------
+    if (isGuest || mode === "guest" || !userId) {
+      setLoading(true);
+      const fetchGuestAccounts = async () => {
+        const guestData = {};
+        for (const type of accountTypes) {
+          const key = `guest_${trackerId}_${type}`;
+          const json = await AsyncStorage.getItem(key);
+          guestData[type] = json ? JSON.parse(json) : [];
+        }
+        setAccounts(guestData);
+        recalcTotal(guestData);
+        setLoading(false);
+      };
+      fetchGuestAccounts();
+      const interval = setInterval(fetchGuestAccounts, 1000);
+      return () => clearInterval(interval);
+    }
+
+    // ---------- Personal / Shared Mode ----------
+    const pathBase = mode === "personal"
+      ? ["users", userId, "trackers", trackerId]
+      : ["sharedTrackers", trackerId];
+
+    const unsubscribers = [];
+
+    // --- Listen to accounts ---
+    accountTypes.forEach(type => {
+      const ref = collection(db, ...pathBase, type);
+      const unsub = onSnapshot(ref, async snapshot => {
+        let liveAccounts = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Merge offline queued updates
+        const queueKey = `${OFFLINE_QUEUE_PREFIX}${type}`;
+        const queueJson = await AsyncStorage.getItem(queueKey);
+        const queue = queueJson ? JSON.parse(queueJson) : [];
+        queue.forEach(item => {
+          if (item.action === "add") liveAccounts.push(item.payload);
+          if (item.action === "update") {
+            const idx = liveAccounts.findIndex(a => a.id === item.payload.id);
+            if (idx !== -1) liveAccounts[idx] = { ...liveAccounts[idx], ...item.payload };
+          }
+          if (item.action === "delete") {
+            liveAccounts = liveAccounts.filter(a => a.id !== item.payload.id);
+          }
+        });
+
+        setAccounts(prev => {
+          const updated = { ...prev, [type]: liveAccounts };
+          recalcTotal(updated);
+          return updated;
+        });
+        setLoading(false);
+      }, err => console.error(`Account listener error (${type}):`, err));
+      unsubscribers.push(unsub);
+    });
+
+    // --- Listen to transactions for display only ---
+    const txRef = collection(db, ...pathBase, "transactions");
+    const unsubTransactions = onSnapshot(txRef, snapshot => {
+      const transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log("Fetched transactions:", transactions);
+      // No balance recalculation here, just optional UI usage if needed
+    }, err => console.error("Transaction listener failed:", err));
+
+    unsubscribers.push(unsubTransactions);
+
+    setCurrentTrackerName(trackerName || "Personal/Shared Tracker");
+
+    return () => unsubscribers.forEach(u => u());
+  }, [trackerId, userId, mode, trackerName, isGuest]);
+
+  // ---------- Compute total assets ----------
+  const recalcTotal = accs => {
+    const total = Object.values(accs)
+      .flat()
+      .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+    setTotalAssets(total);
   };
+
+  const getTypeTotal = type => {
+    const list = Array.isArray(accounts[type]) ? accounts[type] : [];
+    return list.reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+  };
+
+  const formatCurrency = amount => {
+    const num = parseFloat(amount || 0);
+    return `${currencySymbol}${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const getAmountColor = amount => (parseFloat(amount) < 0 ? "#E98898" : "#0076CA");
 
   return (
     <SafeAreaView style={styles.container}>
@@ -145,107 +152,60 @@ useFocusEffect(
         <Text style={styles.headerText}>Accounts</Text>
       </View>
 
+      {currentTrackerName && <Text style={styles.trackertype}>{currentTrackerName}</Text>}
+
       <View style={styles.totalAssetsCard}>
         <Text style={styles.totalAssetsLabel}>Total Assets</Text>
-        <Text style={styles.totalAssetsValue}>{currencySymbol} {totalAssets.toFixed(2)}</Text>
+        <Text style={[styles.totalAssetsValue, { color: "#91D1FF" }]}>{formatCurrency(totalAssets)}</Text>
       </View>
 
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 20 }}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={fetchGroupedAccounts} />
-        }
-      >
-        {renderTypeSection('Cash', grouped.Cash)}
-        {renderTypeSection('Banks', grouped.Banks)}
-        {renderTypeSection('E-Wallets', grouped['E-Wallets'])}
+      <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
+        {accountTypes.map(type => {
+          const list = Array.isArray(accounts[type]) ? accounts[type] : [];
+          const typeTotal = getTypeTotal(type);
+          return (
+            <View key={type} style={styles.typeSection}>
+              <View style={styles.typeRowFull}>
+                <Text style={styles.typeTextFull}>{type}</Text>
+                <Text style={[styles.typeTotalText, { color: getAmountColor(typeTotal) }]}>{formatCurrency(typeTotal)}</Text>
+              </View>
+
+              {loading ? (
+                <ActivityIndicator size="small" color="#145C84" style={{ marginTop: 10 }} />
+              ) : list.length === 0 ? (
+                <Text style={styles.fallbackText}>No accounts yet.</Text>
+              ) : (
+                list.map(acc => (
+                  <View key={acc.id || acc.name} style={styles.accountItem}>
+                    <View style={styles.accountRow}>
+                      <Text style={styles.accountText}>{acc.name}</Text>
+                      <Text style={[styles.accountText, { color: getAmountColor(acc.amount) }]}>{formatCurrency(acc.amount)}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          );
+        })}
       </ScrollView>
     </SafeAreaView>
   );
 }
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  headerBackground: {
-    height: 100,
-    width: '100%',
-    backgroundColor: '#145C84',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    paddingBottom: 12,
-  },
-  headerText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#A4C0CF',
-  },
-  totalAssetsCard: {
-    backgroundColor: '#145C84',
-    padding: 20,
-    borderRadius: 12,
-    marginHorizontal: 20,
-    marginTop: 16,
-    marginBottom: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  totalAssetsLabel: {
-    fontSize: 16,
-    color: '#F7F2B3',
-  },
-  totalAssetsValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#91D1FF',
-  },
-  typeSection: {
-    marginBottom: 16,
-  },
-  typeHeaderRow: {
-    backgroundColor: '#EDEDEE',
-    padding: 12,
-    marginBottom: 8,
-  },
-  typeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  typeTitle: {
-    fontSize: 16,
-    color: '#19445C',
-  },
-  typeTotal: {
-    fontSize: 16,
-    color: '#0076CA',
-  },
-  card: {
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  name: {
-    color:'#386681',
-    fontSize: 14,
-  },
-  balance: {
-    fontSize: 14,
-    color: '#0076CA',
-  },
-    fallbackText: {
-    fontSize: 13,
-    color: '#999',
-    marginTop: 8,
-    marginLeft: 16,
-  },
 
-  toggleText: {
-    textAlign: 'center',
-    color: '#0076CA',
-    marginTop: 6,
-  },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#fff" },
+  headerBackground: { height: 100, backgroundColor: "#145C84", justifyContent: "flex-end", alignItems: "center", paddingBottom: 12 },
+  headerText: { fontSize: 16, fontWeight: "bold", color: "#A4C0CF" },
+  trackertype: { fontWeight: "bold", color: "#6FB5DB", fontSize: 14, textAlign: "center", padding: 10, backgroundColor: "#EDEDEE", marginBottom: 15 },
+  totalAssetsCard: { backgroundColor: "#145C84", padding: 20, borderRadius: 12, marginHorizontal: 20, marginBottom: 8, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  totalAssetsLabel: { fontSize: 16, color: "#F7F2B3" },
+  totalAssetsValue: { fontSize: 16, fontWeight: "bold" },
+  typeSection: { marginBottom: 16, width: "100%" },
+  typeRowFull: { backgroundColor: "#f2f2f2", borderRadius: 8, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", paddingHorizontal: 16 },
+  typeTextFull: { fontSize: 14, fontWeight: "bold", color: "#19445C" },
+  typeTotalText: { fontSize: 14, fontWeight: "bold" },
+  fallbackText: { fontSize: 13, color: "#999", marginTop: 8, marginLeft: 16 },
+  accountItem: { marginTop: 8, marginHorizontal: 16, paddingVertical: 6 },
+  accountRow: { flexDirection: "row", justifyContent: "space-between" },
+  accountText: { fontSize: 14, color: "#19445C" },
 });
